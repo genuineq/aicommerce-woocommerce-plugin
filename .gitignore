@@ -15,3 +15,7 @@ npm-debug.log
 # Composer
 vendor/
 composer.lock
+
+# Planning and development files
+PLAN.md
+TODO.md
