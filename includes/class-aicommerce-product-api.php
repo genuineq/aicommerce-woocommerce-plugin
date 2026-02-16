@@ -66,6 +66,12 @@ class ProductAPI {
      * Search products endpoint
      */
     public function search_products( \WP_REST_Request $request ): \WP_REST_Response {
+        // Validate API signature
+        $validation = APIValidator::validate_request( $request );
+        if ( ! $validation['valid'] ) {
+            return APIValidator::error_response( $validation );
+        }
+        
         $search_query = sanitize_text_field( $request->get_param( 'q' ) );
         $per_page     = absint( $request->get_param( 'per_page' ) ) ?: 20;
         $page         = absint( $request->get_param( 'page' ) ) ?: 1;
