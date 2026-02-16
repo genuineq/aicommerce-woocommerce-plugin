@@ -3,7 +3,7 @@
  * Plugin Name: AICommerce
  * Plugin URI: https://example.com/aicommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.3.3
+ * Version: 1.4.0
  * Author: Your Name
  * Author URI: https://example.com
  * License: GPL v2 or later
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.3.3' );
+define( 'AICOMMERCE_VERSION', '1.4.0' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
@@ -219,9 +219,11 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-rate-limiter.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-api-validator.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
         
-        // Initialize Auth API
+        // Initialize APIs
         new \AICommerce\AuthAPI();
+        new \AICommerce\ProductAPI();
     }
     
     /**
