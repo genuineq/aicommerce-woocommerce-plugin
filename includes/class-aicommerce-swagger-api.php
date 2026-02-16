@@ -1,0 +1,583 @@
+<?php
+/**
+ * Swagger/OpenAPI Documentation API
+ *
+ * @package AICommerce
+ */
+
+namespace AICommerce;
+
+// Exit if accessed directly
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+/**
+ * Swagger API Class
+ * Generates OpenAPI 3.0 specification for AICommerce API
+ */
+class SwaggerAPI {
+    
+    /**
+     * Constructor
+     */
+    public function __construct() {
+        add_action( 'rest_api_init', array( $this, 'register_routes' ) );
+    }
+    
+    /**
+     * Register REST API routes
+     */
+    public function register_routes(): void {
+        $namespace = 'aicommerce/v1';
+        
+        // OpenAPI specification endpoint
+        register_rest_route(
+            $namespace,
+            '/swagger.json',
+            array(
+                'methods'             => 'GET',
+                'callback'            => array( $this, 'get_openapi_spec' ),
+                'permission_callback' => '__return_true',
+            )
+        );
+    }
+    
+    /**
+     * Get OpenAPI 3.0 specification
+     */
+    public function get_openapi_spec( \WP_REST_Request $request ): \WP_REST_Response {
+        $spec = $this->generate_openapi_spec();
+        
+        return new \WP_REST_Response( $spec, 200 );
+    }
+    
+    /**
+     * Generate OpenAPI 3.0 specification
+     */
+    private function generate_openapi_spec(): array {
+        $base_url = home_url( '/wp-json/aicommerce/v1' );
+        
+        return array(
+            'openapi' => '3.0.0',
+            'info'    => array(
+                'title'       => 'AICommerce API',
+                'version'     => '1.0.0',
+                'description' => 'REST API for AICommerce platform integration with WooCommerce',
+                'contact'     => array(
+                    'name' => 'AICommerce Support',
+                ),
+            ),
+            'servers' => array(
+                array(
+                    'url'         => $base_url,
+                    'description' => 'AICommerce API Server',
+                ),
+            ),
+            'tags'    => array(
+                array(
+                    'name'        => 'Authentication',
+                    'description' => 'User authentication and JWT token management endpoints',
+                ),
+                array(
+                    'name'        => 'Products',
+                    'description' => 'Product search and management endpoints',
+                ),
+            ),
+            'paths'   => array(
+                '/auth/login'      => $this->get_login_endpoint(),
+                '/auth/validate'   => $this->get_validate_endpoint(),
+                '/auth/refresh'    => $this->get_refresh_endpoint(),
+                '/auth/logout'     => $this->get_logout_endpoint(),
+                '/products/search' => $this->get_search_products_endpoint(),
+            ),
+            'components' => array(
+                'securitySchemes' => array(
+                    'apiKey' => array(
+                        'type'        => 'apiKey',
+                        'in'          => 'header',
+                        'name'        => 'X-API-Key',
+                        'description' => 'API Key for platform authentication',
+                    ),
+                    'apiSignature' => array(
+                        'type'        => 'apiKey',
+                        'in'          => 'header',
+                        'name'        => 'X-API-Signature',
+                        'description' => 'HMAC-SHA256 signature for request validation',
+                    ),
+                    'apiTimestamp' => array(
+                        'type'        => 'apiKey',
+                        'in'          => 'header',
+                        'name'        => 'X-Request-Timestamp',
+                        'description' => 'Unix timestamp in seconds for request validation',
+                    ),
+                ),
+                'schemas' => array(
+                    'Error' => array(
+                        'type'       => 'object',
+                        'properties' => array(
+                            'success' => array(
+                                'type'    => 'boolean',
+                                'example' => false,
+                            ),
+                            'code'    => array(
+                                'type'        => 'string',
+                                'description' => 'Error code',
+                            ),
+                            'message' => array(
+                                'type'        => 'string',
+                                'description' => 'Error message',
+                            ),
+                        ),
+                    ),
+                    'User' => array(
+                        'type'       => 'object',
+                        'properties' => array(
+                            'id'           => array( 'type' => 'integer' ),
+                            'email'        => array( 'type' => 'string', 'format' => 'email' ),
+                            'username'     => array( 'type' => 'string' ),
+                            'display_name' => array( 'type' => 'string' ),
+                            'first_name'   => array( 'type' => 'string' ),
+                            'last_name'    => array( 'type' => 'string' ),
+                            'roles'        => array(
+                                'type'  => 'array',
+                                'items' => array( 'type' => 'string' ),
+                            ),
+                        ),
+                    ),
+                    'Product' => array(
+                        'type'       => 'object',
+                        'properties' => array(
+                            'id'             => array( 'type' => 'integer' ),
+                            'name'           => array( 'type' => 'string' ),
+                            'slug'           => array( 'type' => 'string' ),
+                            'permalink'      => array( 'type' => 'string', 'format' => 'uri' ),
+                            'sku'            => array( 'type' => 'string' ),
+                            'type'           => array( 'type' => 'string' ),
+                            'status'         => array( 'type' => 'string' ),
+                            'price'          => array( 'type' => 'string' ),
+                            'regular_price'  => array( 'type' => 'string' ),
+                            'sale_price'     => array( 'type' => 'string' ),
+                            'on_sale'        => array( 'type' => 'boolean' ),
+                            'stock_status'   => array( 'type' => 'string' ),
+                            'stock_quantity' => array( 'type' => 'integer', 'nullable' => true ),
+                            'manage_stock'   => array( 'type' => 'boolean' ),
+                            'image'          => array(
+                                'type'       => 'object',
+                                'properties' => array(
+                                    'id'  => array( 'type' => 'integer', 'nullable' => true ),
+                                    'url' => array( 'type' => 'string', 'format' => 'uri' ),
+                                    'alt' => array( 'type' => 'string' ),
+                                ),
+                            ),
+                            'categories' => array(
+                                'type'  => 'array',
+                                'items' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'id'   => array( 'type' => 'integer' ),
+                                        'name' => array( 'type' => 'string' ),
+                                        'slug' => array( 'type' => 'string' ),
+                                    ),
+                                ),
+                            ),
+                            'tags' => array(
+                                'type'  => 'array',
+                                'items' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'id'   => array( 'type' => 'integer' ),
+                                        'name' => array( 'type' => 'string' ),
+                                        'slug' => array( 'type' => 'string' ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get login endpoint specification
+     */
+    private function get_login_endpoint(): array {
+        return array(
+            'post' => array(
+                'tags'        => array( 'Authentication' ),
+                'summary'     => 'User login',
+                'description' => 'Authenticate user and receive JWT access and refresh tokens',
+                'security'   => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'requestBody' => array(
+                    'required' => true,
+                    'content'  => array(
+                        'application/json' => array(
+                            'schema' => array(
+                                'type'       => 'object',
+                                'required'   => array( 'password' ),
+                                'properties' => array(
+                                    'username' => array(
+                                        'type'        => 'string',
+                                        'example'     => 'test',
+                                        'description' => 'Username for login (optional if email provided)',
+                                    ),
+                                    'email'    => array(
+                                        'type'        => 'string',
+                                        'example'     => 'test@test.com',
+                                        'format'      => 'email',
+                                        'description' => 'Email for login (optional if username provided)',
+                                    ),
+                                    'password' => array(
+                                        'type'        => 'string',
+                                        'example'     => 'twgBY13yxTy5ylo^(GMmsDgI',
+                                        'format'      => 'password',
+                                        'description' => 'User password',
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Login successful',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success'       => array( 'type' => 'boolean', 'example' => true ),
+                                        'token'         => array( 'type' => 'string', 'description' => 'JWT access token' ),
+                                        'refresh_token' => array( 'type' => 'string', 'description' => 'JWT refresh token' ),
+                                        'expires_in'    => array( 'type' => 'integer', 'example' => 86400 ),
+                                        'user'          => array( '$ref' => '#/components/schemas/User' ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Invalid request',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                                'example' => array(
+                                    'success' => false,
+                                    'code'    => 'missing_password',
+                                    'message' => 'Password is required.',
+                                ),
+                            ),
+                        ),
+                    ),
+                    '401' => array(
+                        'description' => 'Authentication failed',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '429' => array(
+                        'description' => 'Rate limit exceeded',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get validate endpoint specification
+     */
+    private function get_validate_endpoint(): array {
+        return array(
+            'post' => array(
+                'tags'        => array( 'Authentication' ),
+                'summary'     => 'Validate JWT token',
+                'description' => 'Validate JWT access token and return user information',
+                'security'   => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'requestBody' => array(
+                    'required' => false,
+                    'content'  => array(
+                        'application/json' => array(
+                            'schema' => array(
+                                'type'       => 'object',
+                                'properties' => array(
+                                    'token' => array(
+                                        'type'        => 'string',
+                                        'description' => 'JWT token (optional if provided in Authorization header)',
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Token is valid',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success' => array( 'type' => 'boolean', 'example' => true ),
+                                        'valid'   => array( 'type' => 'boolean', 'example' => true ),
+                                        'user'    => array( '$ref' => '#/components/schemas/User' ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Missing token',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '401' => array(
+                        'description' => 'Invalid or expired token',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get refresh endpoint specification
+     */
+    private function get_refresh_endpoint(): array {
+        return array(
+            'post' => array(
+                'tags'        => array( 'Authentication' ),
+                'summary'     => 'Refresh access token',
+                'description' => 'Get a new access token using refresh token',
+                'security'   => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'requestBody' => array(
+                    'required' => true,
+                    'content'  => array(
+                        'application/json' => array(
+                            'schema' => array(
+                                'type'       => 'object',
+                                'required'   => array( 'refresh_token' ),
+                                'properties' => array(
+                                    'refresh_token' => array(
+                                        'type'        => 'string',
+                                        'description' => 'JWT refresh token',
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Token refreshed successfully',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success'    => array( 'type' => 'boolean', 'example' => true ),
+                                        'token'      => array( 'type' => 'string', 'description' => 'New JWT access token' ),
+                                        'expires_in' => array( 'type' => 'integer', 'example' => 86400 ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Missing refresh token',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '401' => array(
+                        'description' => 'Invalid or expired refresh token',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get logout endpoint specification
+     */
+    private function get_logout_endpoint(): array {
+        return array(
+            'post' => array(
+                'tags'        => array( 'Authentication' ),
+                'summary'     => 'User logout',
+                'description' => 'Revoke refresh token and logout user',
+                'security'   => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'requestBody' => array(
+                    'required' => true,
+                    'content'  => array(
+                        'application/json' => array(
+                            'schema' => array(
+                                'type'       => 'object',
+                                'required'   => array( 'refresh_token' ),
+                                'properties' => array(
+                                    'refresh_token' => array(
+                                        'type'        => 'string',
+                                        'description' => 'JWT refresh token to revoke',
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Logout successful',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success' => array( 'type' => 'boolean', 'example' => true ),
+                                        'message' => array( 'type' => 'string', 'example' => 'Logged out successfully.' ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Missing refresh token',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get search products endpoint specification
+     */
+    private function get_search_products_endpoint(): array {
+        return array(
+            'get' => array(
+                'tags'        => array( 'Products' ),
+                'summary'     => 'Search products',
+                'description' => 'Search products by name, description, or SKU with pagination and relevance sorting',
+                'security'   => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'parameters' => array(
+                    array(
+                        'name'        => 'q',
+                        'in'          => 'query',
+                        'required'    => true,
+                        'description' => 'Search query',
+                        'schema'      => array(
+                            'type' => 'string',
+                        ),
+                    ),
+                    array(
+                        'name'        => 'per_page',
+                        'in'          => 'query',
+                        'required'    => false,
+                        'description' => 'Number of products per page',
+                        'schema'      => array(
+                            'type'    => 'integer',
+                            'default' => 20,
+                            'minimum' => 1,
+                            'maximum' => 100,
+                        ),
+                    ),
+                    array(
+                        'name'        => 'page',
+                        'in'          => 'query',
+                        'required'    => false,
+                        'description' => 'Page number',
+                        'schema'      => array(
+                            'type'    => 'integer',
+                            'default' => 1,
+                            'minimum' => 1,
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Search results',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success'      => array( 'type' => 'boolean', 'example' => true ),
+                                        'products'     => array(
+                                            'type'  => 'array',
+                                            'items' => array( '$ref' => '#/components/schemas/Product' ),
+                                        ),
+                                        'total'        => array( 'type' => 'integer', 'example' => 45 ),
+                                        'per_page'     => array( 'type' => 'integer', 'example' => 20 ),
+                                        'current_page' => array( 'type' => 'integer', 'example' => 1 ),
+                                        'pages'        => array( 'type' => 'integer', 'example' => 3 ),
+                                        'query'        => array( 'type' => 'string', 'example' => 'laptop' ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Empty search query',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '401' => array(
+                        'description' => 'Invalid signature',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+}
