@@ -161,7 +161,7 @@
 }
 
 .aicommerce-label {
-    flex: 0 0 140px;
+    flex: 0 0 190px;
     font-size: 15px;
     font-weight: 600;
     color: #334155;
@@ -176,7 +176,6 @@
 .aicommerce-input-wrapper {
     flex: 1;
     display: flex;
-    flex-direction: column;
     gap: 8px;
 }
 
@@ -198,6 +197,10 @@
 .aicommerce-input:focus {
     border-color: #6366f1;
     outline: none;
+}
+
+.aicommerce-input#aicommerce_iframe_button_color {
+    width: 30px;
 }
 
 .aicommerce-description {
@@ -424,4 +427,123 @@ html {
 
 .aicommerce-sidebar::-webkit-scrollbar-thumb:hover {
     background: #94a3b8;
+}
+
+/* Position Selector */
+.aicommerce-position-selector {
+    margin-top: 8px;
+}
+
+.aicommerce-position-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+    gap: 4px;
+    width: 300px;
+    height: 300px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px;
+    background: #f8fafc;
+}
+
+.aicommerce-position-cell {
+    position: relative;
+    border: 2px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.aicommerce-position-cell:hover {
+    border-color: #6366f1;
+    background: #f0f4ff;
+    transform: scale(1.05);
+}
+
+.aicommerce-position-cell.active {
+    border-color: #6366f1;
+    background: #eef2ff;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.aicommerce-position-cell.active .aicommerce-position-indicator {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.aicommerce-position-indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #6366f1;
+    opacity: 0;
+    transform: scale(0);
+    transition: all 0.2s ease;
+}
+
+.aicommerce-position-cell.active .aicommerce-position-indicator {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.aicommerce-position-cell-empty {
+    pointer-events: none;
+    background: transparent;
+    border: none;
+    cursor: default;
+}
+
+/* Color Picker */
+.aicommerce-color-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+    visibility: hidden;
+}
+
+.aicommerce-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.aicommerce-color-picker-label {
+    display: inline-block;
+    cursor: pointer;
+    position: relative;
+    margin-left: 0;
+}
+
+.aicommerce-color-picker-circle {
+    display: inline-block;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 3px solid #e2e8f0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+    background-color: #0073aa;
+    position: relative;
+}
+
+.aicommerce-color-picker-label:hover .aicommerce-color-picker-circle {
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-color: #6366f1;
+}
+
+.aicommerce-color-picker-label:active .aicommerce-color-picker-circle {
+    transform: scale(0.95);
+}
+
+.aicommerce-color-picker-label:focus-within .aicommerce-color-picker-circle {
+    outline: 2px solid #6366f1;
+    outline-offset: 2px;
 }

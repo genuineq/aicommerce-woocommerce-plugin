@@ -85,6 +85,37 @@ class Admin {
                 'default'           => '',
             )
         );
+        
+        // Iframe settings
+        register_setting(
+            'aicommerce_iframe_settings',
+            'aicommerce_iframe_enabled',
+            array(
+                'type'              => 'boolean',
+                'sanitize_callback' => 'rest_sanitize_boolean',
+                'default'           => false,
+            )
+        );
+        
+        register_setting(
+            'aicommerce_iframe_settings',
+            'aicommerce_iframe_position',
+            array(
+                'type'              => 'string',
+                'sanitize_callback' => 'sanitize_text_field',
+                'default'           => 'bottom-right',
+            )
+        );
+        
+        register_setting(
+            'aicommerce_iframe_settings',
+            'aicommerce_iframe_button_color',
+            array(
+                'type'              => 'string',
+                'sanitize_callback' => 'sanitize_hex_color',
+                'default'           => '#0073aa',
+            )
+        );
     }
     
     /**
@@ -101,6 +132,14 @@ class Admin {
             array(),
             AICOMMERCE_VERSION
         );
+        
+        wp_enqueue_script(
+            'aicommerce-admin',
+            AICOMMERCE_PLUGIN_URL . 'assets/js/admin.js',
+            array(),
+            AICOMMERCE_VERSION,
+            true
+        );
     }
     
     /**
@@ -113,7 +152,8 @@ class Admin {
         
         $current_tab = isset( $_GET['tab'] ) ? sanitize_text_field( $_GET['tab'] ) : 'api';
         
-        if ( isset( $_POST['aicommerce_save_settings'] ) ) {
+        // Handle API settings save
+        if ( isset( $_POST['aicommerce_save_settings'] ) && 'api' === $current_tab ) {
             check_admin_referer( 'aicommerce_settings_nonce' );
             
             $api_key = sanitize_text_field( $_POST['aicommerce_api_key'] ?? '' );
@@ -134,6 +174,21 @@ class Admin {
             echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Settings saved successfully.', 'aicommerce' ) . '</p></div>';
         }
         
+        // Handle Iframe settings save
+        if ( isset( $_POST['aicommerce_save_iframe_settings'] ) && 'iframe' === $current_tab ) {
+            check_admin_referer( 'aicommerce_iframe_settings_nonce' );
+            
+            $iframe_enabled = isset( $_POST['aicommerce_iframe_enabled'] ) ? 1 : 0;
+            $iframe_position = sanitize_text_field( $_POST['aicommerce_iframe_position'] ?? 'bottom-right' );
+            $iframe_button_color = sanitize_hex_color( $_POST['aicommerce_iframe_button_color'] ?? '#0073aa' );
+            
+            update_option( 'aicommerce_iframe_enabled', $iframe_enabled );
+            update_option( 'aicommerce_iframe_position', $iframe_position );
+            update_option( 'aicommerce_iframe_button_color', $iframe_button_color );
+            
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Iframe settings saved successfully.', 'aicommerce' ) . '</p></div>';
+        }
+        
         $api_key    = $this->get_decrypted_option( 'aicommerce_api_key' );
         $api_secret = $this->get_decrypted_option( 'aicommerce_api_secret' );
         
@@ -150,6 +205,12 @@ class Admin {
                                 <?php esc_html_e( 'API Settings', 'aicommerce' ); ?>
                             </a>
                         </li>
+                        <li class="<?php echo $current_tab === 'iframe' ? 'active' : ''; ?>">
+                            <a href="<?php echo esc_url( admin_url( 'admin.php?page=aicommerce&tab=iframe' ) ); ?>">
+                                <span class="dashicons dashicons-external"></span>
+                                <?php esc_html_e( 'Iframe Settings', 'aicommerce' ); ?>
+                            </a>
+                        </li>
                     </ul>
                 </div>
                 
@@ -158,6 +219,9 @@ class Admin {
                     switch ( $current_tab ) {
                         case 'api':
                             $this->render_api_tab( $api_key, $api_secret );
+                            break;
+                        case 'iframe':
+                            $this->render_iframe_tab();
                             break;
                         default:
                             $this->render_api_tab( $api_key, $api_secret );
@@ -222,6 +286,117 @@ class Admin {
                 
                 <div class="aicommerce-form-submit">
                     <button type="submit" name="aicommerce_save_settings" class="button button-primary aicommerce-button">
+                        <?php esc_html_e( 'Save Settings', 'aicommerce' ); ?>
+                    </button>
+                </div>
+            </form>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Render Iframe settings tab
+     */
+    private function render_iframe_tab(): void {
+        $iframe_enabled = get_option( 'aicommerce_iframe_enabled', false );
+        $iframe_position = get_option( 'aicommerce_iframe_position', 'bottom-right' );
+        $iframe_button_color = get_option( 'aicommerce_iframe_button_color', '#0073aa' );
+        
+        $positions = array(
+            'top-left'      => __( 'Top Left', 'aicommerce' ),
+            'top-center'    => __( 'Top Center', 'aicommerce' ),
+            'top-right'     => __( 'Top Right', 'aicommerce' ),
+            'middle-left'   => __( 'Middle Left', 'aicommerce' ),
+            'middle-right'  => __( 'Middle Right', 'aicommerce' ),
+            'bottom-left'   => __( 'Bottom Left', 'aicommerce' ),
+            'bottom-center' => __( 'Bottom Center', 'aicommerce' ),
+            'bottom-right'  => __( 'Bottom Right', 'aicommerce' ),
+        );
+        ?>
+        <div class="aicommerce-tab-content">
+            <h2><?php esc_html_e( 'Iframe Button Settings', 'aicommerce' ); ?></h2>
+            
+            <form method="post" action="" class="aicommerce-form">
+                <?php wp_nonce_field( 'aicommerce_iframe_settings_nonce' ); ?>
+                
+                <div class="aicommerce-form-fields">
+                    <div class="aicommerce-form-field">
+                        <label for="aicommerce_iframe_enabled" class="aicommerce-label">
+                            <input 
+                                type="checkbox" 
+                                name="aicommerce_iframe_enabled" 
+                                id="aicommerce_iframe_enabled" 
+                                value="1"
+                                <?php checked( $iframe_enabled, true ); ?>
+                            />
+                            <?php esc_html_e( 'Enable Iframe Button', 'aicommerce' ); ?>
+                        </label>
+                    </div>
+                    
+                    <div class="aicommerce-form-field">
+                        <label for="aicommerce_iframe_position" class="aicommerce-label">
+                            <?php esc_html_e( 'Button Position', 'aicommerce' ); ?>
+                        </label>
+                        <div class="aicommerce-input-wrapper">
+                            <input 
+                                type="hidden" 
+                                name="aicommerce_iframe_position" 
+                                id="aicommerce_iframe_position" 
+                                value="<?php echo esc_attr( $iframe_position ); ?>"
+                            />
+                            <div class="aicommerce-position-selector" id="aicommerce-position-selector">
+                                <div class="aicommerce-position-grid">
+                                    <div class="aicommerce-position-cell" data-position="top-left" title="<?php esc_attr_e( 'Top Left', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                    <div class="aicommerce-position-cell" data-position="top-center" title="<?php esc_attr_e( 'Top Center', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                    <div class="aicommerce-position-cell" data-position="top-right" title="<?php esc_attr_e( 'Top Right', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                    <div class="aicommerce-position-cell" data-position="middle-left" title="<?php esc_attr_e( 'Middle Left', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                    <div class="aicommerce-position-cell aicommerce-position-cell-empty"></div>
+                                    <div class="aicommerce-position-cell" data-position="middle-right" title="<?php esc_attr_e( 'Middle Right', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                    <div class="aicommerce-position-cell" data-position="bottom-left" title="<?php esc_attr_e( 'Bottom Left', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                    <div class="aicommerce-position-cell" data-position="bottom-center" title="<?php esc_attr_e( 'Bottom Center', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                    <div class="aicommerce-position-cell" data-position="bottom-right" title="<?php esc_attr_e( 'Bottom Right', 'aicommerce' ); ?>">
+                                        <span class="aicommerce-position-indicator"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="aicommerce-form-field">
+                        <label for="aicommerce_iframe_button_color" class="aicommerce-label">
+                            <?php esc_html_e( 'Button Background Color', 'aicommerce' ); ?>
+                        </label>
+                        <div class="aicommerce-input-wrapper">
+                            <input 
+                                type="color" 
+                                name="aicommerce_iframe_button_color" 
+                                id="aicommerce_iframe_button_color" 
+                                value="<?php echo esc_attr( $iframe_button_color ); ?>" 
+                                class="aicommerce-color-input"
+                            />
+                            <label for="aicommerce_iframe_button_color" class="aicommerce-color-picker-label">
+                                <span class="aicommerce-color-picker-circle" style="background-color: <?php echo esc_attr( $iframe_button_color ); ?>;"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="aicommerce-form-submit">
+                    <button type="submit" name="aicommerce_save_iframe_settings" class="button button-primary aicommerce-button">
                         <?php esc_html_e( 'Save Settings', 'aicommerce' ); ?>
                     </button>
                 </div>
