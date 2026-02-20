@@ -104,7 +104,6 @@ class Iframe {
             true
         );
         
-        // Pass settings to JavaScript
         wp_localize_script(
             'aicommerce-iframe',
             'aicommerceIframe',

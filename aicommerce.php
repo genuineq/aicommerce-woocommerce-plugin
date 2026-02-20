@@ -221,17 +221,24 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-swagger-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-sse.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-sync.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
         
         // Initialize APIs
         new \AICommerce\AuthAPI();
         new \AICommerce\ProductAPI();
+        new \AICommerce\CartAPI();
         new \AICommerce\SwaggerAPI();
+        new \AICommerce\SSE();
         
         // Initialize frontend features
         new \AICommerce\Iframe();
         new \AICommerce\GuestToken();
+        new \AICommerce\CartSync();
     }
     
     /**

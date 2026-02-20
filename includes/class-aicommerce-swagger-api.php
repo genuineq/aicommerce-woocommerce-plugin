@@ -83,6 +83,10 @@ class SwaggerAPI {
                     'name'        => 'Products',
                     'description' => 'Product search and management endpoints',
                 ),
+                array(
+                    'name'        => 'Cart',
+                    'description' => 'Cart management endpoints for guest users',
+                ),
             ),
             'paths'   => array(
                 '/auth/login'      => $this->get_login_endpoint(),
@@ -90,6 +94,8 @@ class SwaggerAPI {
                 '/auth/refresh'    => $this->get_refresh_endpoint(),
                 '/auth/logout'     => $this->get_logout_endpoint(),
                 '/products/search' => $this->get_search_products_endpoint(),
+                '/cart/add'        => $this->get_cart_add_endpoint(),
+                '/cart'            => $this->get_cart_get_endpoint(),
             ),
             'components' => array(
                 'securitySchemes' => array(
@@ -570,6 +576,289 @@ class SwaggerAPI {
                     ),
                     '401' => array(
                         'description' => 'Invalid signature',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get add to cart endpoint specification
+     */
+    private function get_cart_add_endpoint(): array {
+        return array(
+            'post' => array(
+                'tags'        => array( 'Cart' ),
+                'summary'     => 'Add item to cart',
+                'description' => 'Add a product to cart by guest_token or user_id. Provide either guest_token or user_id, not both.',
+                'security'   => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'requestBody' => array(
+                    'required' => true,
+                    'content'  => array(
+                        'application/json' => array(
+                            'schema' => array(
+                                'type'       => 'object',
+                                'required'   => array( 'product_id' ),
+                                'properties' => array(
+                                    'guest_token'    => array(
+                                        'type'        => 'string',
+                                        'description' => 'Guest token for cart identification (required if user_id not provided)',
+                                        'example'     => 'guest_1700000000_abc123xyz_1a2b3c4d',
+                                    ),
+                                    'user_id'        => array(
+                                        'type'        => 'integer',
+                                        'description' => 'User ID for cart identification (required if guest_token not provided)',
+                                        'example'     => 42,
+                                    ),
+                                    'product_id'    => array(
+                                        'type'        => 'integer',
+                                        'description' => 'Product ID to add to cart',
+                                        'example'     => 123,
+                                    ),
+                                    'quantity'      => array(
+                                        'type'        => 'integer',
+                                        'description' => 'Quantity to add (default: 1)',
+                                        'default'     => 1,
+                                        'minimum'     => 1,
+                                        'example'     => 1,
+                                    ),
+                                    'variation_data' => array(
+                                        'type'        => 'object',
+                                        'description' => 'Variation data for variable products',
+                                        'example'     => array(),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Item added successfully',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success'    => array( 'type' => 'boolean', 'example' => true ),
+                                        'message'    => array( 'type' => 'string', 'example' => 'Item added to cart successfully.' ),
+                                        'cart_count' => array( 'type' => 'integer', 'example' => 3 ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Invalid request',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                                'examples' => array(
+                                    'missing_identifier' => array(
+                                        'value' => array(
+                                            'success' => false,
+                                            'code'    => 'missing_identifier',
+                                            'message' => 'Either guest_token or user_id is required.',
+                                        ),
+                                    ),
+                                    'conflicting_identifiers' => array(
+                                        'value' => array(
+                                            'success' => false,
+                                            'code'    => 'conflicting_identifiers',
+                                            'message' => 'Provide either guest_token or user_id, not both.',
+                                        ),
+                                    ),
+                                    'invalid_user_id' => array(
+                                        'value' => array(
+                                            'success' => false,
+                                            'code'    => 'invalid_user_id',
+                                            'message' => 'Invalid user ID.',
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '404' => array(
+                        'description' => 'Product not found',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '500' => array(
+                        'description' => 'Failed to add item',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get cart endpoint specification
+     */
+    private function get_cart_get_endpoint(): array {
+        return array(
+            'get' => array(
+                'tags'        => array( 'Cart' ),
+                'summary'     => 'Get cart',
+                'description' => 'Get cart by guest_token or user_id. Provide either guest_token or user_id, not both.',
+                'security'   => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'parameters' => array(
+                    array(
+                        'name'        => 'guest_token',
+                        'in'          => 'query',
+                        'required'    => false,
+                        'description' => 'Guest token for cart identification (required if user_id not provided)',
+                        'schema'      => array(
+                            'type'    => 'string',
+                            'example' => 'guest_1700000000_abc123xyz_1a2b3c4d',
+                        ),
+                    ),
+                    array(
+                        'name'        => 'user_id',
+                        'in'          => 'query',
+                        'required'    => false,
+                        'description' => 'User ID for cart identification (required if guest_token not provided)',
+                        'schema'      => array(
+                            'type'    => 'integer',
+                            'example' => 42,
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Cart retrieved successfully',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success'    => array( 'type' => 'boolean', 'example' => true ),
+                                        'cart'       => array(
+                                            'type'  => 'array',
+                                            'items' => array(
+                                                'type'       => 'object',
+                                                'properties' => array(
+                                                    'cart_item_key' => array( 'type' => 'string' ),
+                                                    'product_id'    => array( 'type' => 'integer' ),
+                                                    'quantity'       => array( 'type' => 'integer' ),
+                                                    'variation_data' => array( 'type' => 'object' ),
+                                                ),
+                                            ),
+                                        ),
+                                        'cart_count' => array( 'type' => 'integer', 'example' => 3 ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Invalid request',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                                'examples' => array(
+                                    'missing_identifier' => array(
+                                        'value' => array(
+                                            'success' => false,
+                                            'code'    => 'missing_identifier',
+                                            'message' => 'Either guest_token or user_id is required.',
+                                        ),
+                                    ),
+                                    'invalid_user_id' => array(
+                                        'value' => array(
+                                            'success' => false,
+                                            'code'    => 'invalid_user_id',
+                                            'message' => 'Invalid user ID.',
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get cart sync endpoint specification
+     */
+    private function get_cart_sync_endpoint(): array {
+        return array(
+            'post' => array(
+                'tags'        => array( 'Cart' ),
+                'summary'     => 'Sync cart to WooCommerce session',
+                'description' => 'Sync guest cart stored by guest_token to current WooCommerce session (called from frontend)',
+                'requestBody' => array(
+                    'required' => true,
+                    'content'  => array(
+                        'application/json' => array(
+                            'schema' => array(
+                                'type'       => 'object',
+                                'required'   => array( 'guest_token' ),
+                                'properties' => array(
+                                    'guest_token' => array(
+                                        'type'        => 'string',
+                                        'description' => 'Guest token for cart identification',
+                                        'example'     => 'guest_1700000000_abc123xyz_1a2b3c4d',
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Cart synced successfully',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success'      => array( 'type' => 'boolean', 'example' => true ),
+                                        'message'      => array( 'type' => 'string', 'example' => 'Synced 3 items to cart.' ),
+                                        'synced_count' => array( 'type' => 'integer', 'example' => 3 ),
+                                        'total_items'  => array( 'type' => 'integer', 'example' => 3 ),
+                                        'errors'       => array(
+                                            'type'  => 'array',
+                                            'items' => array( 'type' => 'string' ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Missing guest token',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '500' => array(
+                        'description' => 'WooCommerce not available',
                         'content'    => array(
                             'application/json' => array(
                                 'schema' => array( '$ref' => '#/components/schemas/Error' ),
