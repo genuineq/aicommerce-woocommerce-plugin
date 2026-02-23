@@ -164,12 +164,15 @@ class CartSync {
                 $variation_id = absint( $variation_data['variation_id'] );
             }
             
+            $variation_data = CartAPI::normalize_variation_data_for_wc( $product_id, $variation_data );
+            $variation_attrs = CartAPI::get_variation_attributes_for_add_to_cart( $variation_data, $product_id );
+            
             $cart_item_key = null;
             $existing_quantity = 0;
             foreach ( $wc_cart->get_cart() as $key => $cart_item ) {
                 if ( $cart_item['product_id'] == $product_id && 
                      $cart_item['variation_id'] == $variation_id &&
-                     ( empty( $variation_data ) || $cart_item['variation'] == $variation_data ) ) {
+                     ( empty( $variation_attrs ) || $cart_item['variation'] == $variation_attrs ) ) {
                     $cart_item_key = $key;
                     $existing_quantity = $cart_item['quantity'];
                     break;
@@ -177,7 +180,14 @@ class CartSync {
             }
             
             if ( ! $cart_item_key ) {
-                $new_cart_item_key = $wc_cart->add_to_cart( $product_id, $quantity, $variation_id, $variation_data );
+                try {
+                    $new_cart_item_key = $wc_cart->add_to_cart( $product_id, $quantity, $variation_id, $variation_attrs );
+                } catch ( \Exception $e ) {
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+                        error_log( '[AICOM] sync add_to_cart exception: ' . $e->getMessage() . ' product_id=' . $product_id . ' variation_id=' . $variation_id );
+                    }
+                    $new_cart_item_key = false;
+                }
                 
                 if ( $new_cart_item_key && $new_cart_item_key != $item['key'] ) {
                     $user_cart[ $idx ]['key'] = $new_cart_item_key;
@@ -220,11 +230,15 @@ class CartSync {
         $wc_cart_items = array();
         
         foreach ( $wc_cart->get_cart() as $cart_item_key => $cart_item ) {
+            $variation_data = isset( $cart_item['variation'] ) ? $cart_item['variation'] : array();
+            if ( ! empty( $cart_item['variation_id'] ) ) {
+                $variation_data = array_merge( array( 'variation_id' => (int) $cart_item['variation_id'] ), $variation_data );
+            }
             $wc_cart_items[] = array(
                 'key'            => $cart_item_key,
                 'product_id'     => $cart_item['product_id'],
                 'quantity'       => $cart_item['quantity'],
-                'variation_data' => isset( $cart_item['variation'] ) ? $cart_item['variation'] : array(),
+                'variation_data' => $variation_data,
                 'added_at'       => time(),
             );
         }

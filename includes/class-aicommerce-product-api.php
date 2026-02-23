@@ -40,9 +40,9 @@ class ProductAPI {
                 'permission_callback' => '__return_true',
                 'args'                => array(
                     'q'         => array(
-                        'description' => __( 'Search query', 'aicommerce' ),
+                        'description' => __( 'Search query. If omitted, products are returned by date.', 'aicommerce' ),
                         'type'        => 'string',
-                        'required'    => true,
+                        'required'    => false,
                     ),
                     'per_page'  => array(
                         'description' => __( 'Number of products per page', 'aicommerce' ),
@@ -66,7 +66,6 @@ class ProductAPI {
      * Search products endpoint
      */
     public function search_products( \WP_REST_Request $request ): \WP_REST_Response {
-        // Validate API signature
         $validation = APIValidator::validate_request( $request );
         if ( ! $validation['valid'] ) {
             return APIValidator::error_response( $validation );
@@ -76,15 +75,8 @@ class ProductAPI {
         $per_page     = absint( $request->get_param( 'per_page' ) ) ?: 20;
         $page         = absint( $request->get_param( 'page' ) ) ?: 1;
         
-        if ( empty( $search_query ) ) {
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'empty_search_query',
-                    'message' => __( 'Search query is required.', 'aicommerce' ),
-                ),
-                400
-            );
+        if ( empty( trim( $search_query ) ) ) {
+            return $this->get_products_by_date( $per_page, $page );
         }
         
         $title_desc_ids = $this->search_in_title_description( $search_query );
@@ -137,6 +129,49 @@ class ProductAPI {
                 'current_page' => $page,
                 'pages'        => $pages,
                 'query'        => $search_query,
+            ),
+            200
+        );
+    }
+    
+    /**
+     * Get published products ordered by date (when no search query)
+     *
+     * @param int $per_page Items per page
+     * @param int $page     Page number
+     * @return \WP_REST_Response
+     */
+    private function get_products_by_date( int $per_page, int $page ): \WP_REST_Response {
+        $query = new \WP_Query(
+            array(
+                'post_type'      => 'product',
+                'post_status'    => 'publish',
+                'posts_per_page' => $per_page,
+                'paged'          => $page,
+                'orderby'        => 'date',
+                'order'          => 'DESC',
+                'fields'         => 'ids',
+            )
+        );
+        $ids   = $query->posts;
+        $total = (int) $query->found_posts;
+        $products = array();
+        foreach ( (array) $ids as $product_id ) {
+            $product = wc_get_product( $product_id );
+            if ( $product ) {
+                $products[] = $this->format_product( $product );
+            }
+        }
+        $pages = $per_page > 0 ? (int) ceil( $total / $per_page ) : 0;
+        return new \WP_REST_Response(
+            array(
+                'success'      => true,
+                'products'     => $products,
+                'total'        => $total,
+                'per_page'     => $per_page,
+                'current_page' => $page,
+                'pages'        => $pages,
+                'query'        => '',
             ),
             200
         );
@@ -272,7 +307,7 @@ class ProductAPI {
             $image_url = wp_get_attachment_image_url( $image_id, 'woocommerce_thumbnail' );
         }
         
-        return array(
+        $data = array(
             'id'             => $product->get_id(),
             'name'           => $product->get_name(),
             'slug'           => $product->get_slug(),
@@ -295,6 +330,60 @@ class ProductAPI {
             'categories'     => $this->get_product_categories( $product ),
             'tags'           => $this->get_product_tags( $product ),
         );
+        
+        if ( $product->is_type( 'variable' ) ) {
+            $data['variations'] = $this->get_product_variations( $product );
+        }
+        
+        return $data;
+    }
+    
+    /**
+     * Get variation data for variable products (for use with cart add variation_data)
+     *
+     * @param \WC_Product_Variable $product Variable product
+     * @return array List of variations with variation_id and attributes
+     */
+    private function get_product_variations( \WC_Product $product ): array {
+        if ( ! $product->is_type( 'variable' ) ) {
+            return array();
+        }
+        
+        $variations = array();
+        $variation_ids = $product->get_children();
+        
+        foreach ( $variation_ids as $variation_id ) {
+            $variation = wc_get_product( $variation_id );
+            if ( ! $variation || ! $variation->is_purchasable() ) {
+                continue;
+            }
+            
+            $attrs = $variation->get_variation_attributes();
+            $variation_data = array(
+                'variation_id' => (int) $variation_id,
+                'attributes'   => array(),
+                'price'        => $variation->get_price(),
+                'regular_price' => $variation->get_regular_price(),
+                'sale_price'   => $variation->get_sale_price(),
+                'stock_status' => $variation->get_stock_status(),
+                'sku'          => $variation->get_sku(),
+            );
+            
+            foreach ( $attrs as $key => $value ) {
+                if ( $value !== '' ) {
+                    $variation_data['attributes'][ $key ] = $value;
+                }
+            }
+            
+            $variation_data['variation_data'] = array_merge(
+                array( 'variation_id' => (int) $variation_id ),
+                $variation_data['attributes']
+            );
+            
+            $variations[] = $variation_data;
+        }
+        
+        return $variations;
     }
     
     /**

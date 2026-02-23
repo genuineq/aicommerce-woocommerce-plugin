@@ -198,6 +198,31 @@ class SwaggerAPI {
                                     ),
                                 ),
                             ),
+                            'variations' => array(
+                                'type'        => 'array',
+                                'description' => 'Present only for variable products. Each item has variation_id, attributes, variation_data (for POST /cart/add), price, stock_status, sku.',
+                                'items'       => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'variation_id'   => array( 'type' => 'integer', 'description' => 'WooCommerce variation product ID' ),
+                                        'attributes'    => array(
+                                            'type'        => 'object',
+                                            'description' => 'Attribute slugs to values (e.g. attribute_pa_color => red)',
+                                            'additionalProperties' => array( 'type' => 'string' ),
+                                        ),
+                                        'variation_data' => array(
+                                            'type'        => 'object',
+                                            'description' => 'Ready for POST /cart/add variation_data (variation_id + attributes)',
+                                            'additionalProperties' => array( 'type' => 'string' ),
+                                        ),
+                                        'price'          => array( 'type' => 'string' ),
+                                        'regular_price'  => array( 'type' => 'string' ),
+                                        'sale_price'     => array( 'type' => 'string' ),
+                                        'stock_status'   => array( 'type' => 'string' ),
+                                        'sku'            => array( 'type' => 'string' ),
+                                    ),
+                                ),
+                            ),
                         ),
                     ),
                 ),
@@ -503,7 +528,7 @@ class SwaggerAPI {
             'get' => array(
                 'tags'        => array( 'Products' ),
                 'summary'     => 'Search products',
-                'description' => 'Search products by name, description, or SKU with pagination and relevance sorting',
+                'description' => 'Search products by name, description, or SKU with pagination and relevance sorting. If q is omitted, returns products ordered by date (newest first).',
                 'security'   => array(
                     array( 'apiKey' => array() ),
                     array( 'apiSignature' => array() ),
@@ -513,8 +538,8 @@ class SwaggerAPI {
                     array(
                         'name'        => 'q',
                         'in'          => 'query',
-                        'required'    => true,
-                        'description' => 'Search query',
+                        'required'    => false,
+                        'description' => 'Search query. If omitted, products are returned by date (newest first).',
                         'schema'      => array(
                             'type' => 'string',
                         ),
@@ -567,7 +592,7 @@ class SwaggerAPI {
                         ),
                     ),
                     '400' => array(
-                        'description' => 'Empty search query',
+                        'description' => 'Bad request',
                         'content'    => array(
                             'application/json' => array(
                                 'schema' => array( '$ref' => '#/components/schemas/Error' ),
@@ -633,8 +658,12 @@ class SwaggerAPI {
                                     ),
                                     'variation_data' => array(
                                         'type'        => 'object',
-                                        'description' => 'Variation data for variable products',
-                                        'example'     => array(),
+                                        'description' => 'For variable products: pass variation_id (required) and optionally attribute key-value pairs (e.g. attribute_pa_color, attribute_pa_size). For simple products omit or send {}.',
+                                        'example'     => array(
+                                            'variation_id' => 12345,
+                                            'attribute_pa_color' => 'red',
+                                            'attribute_pa_size'  => 'large',
+                                        ),
                                     ),
                                 ),
                             ),
