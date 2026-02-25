@@ -55,30 +55,53 @@ class GuestToken {
     }
     
     /**
+     * Validate guest token format
+     */
+    private function is_valid_token_format( string $token ): bool {
+        return (bool) preg_match( '/^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $token );
+    }
+
+    /**
      * Set guest token cookie
+     * If a valid guest_token is passed via URL parameter, it takes precedence over the existing cookie,
+     * allowing the browser to pick up a cart created externally via the API.
      */
     public function set_cookie_if_needed(): void {
         if ( is_admin() ) {
             return;
         }
-        
+
         if ( is_user_logged_in() ) {
             return;
         }
-        
+
+        // Allow overriding the token via URL parameter (e.g. ?guest_token=guest_xxx).
+        // This lets external API consumers share a cart with the browser by directing the user
+        // to a URL that includes the same guest_token used in the API calls.
+        if ( isset( $_GET['guest_token'] ) ) {
+            $url_token = sanitize_text_field( wp_unslash( $_GET['guest_token'] ) );
+            if ( $this->is_valid_token_format( $url_token ) ) {
+                $secure = is_ssl();
+                $expire = time() + self::COOKIE_EXPIRATION;
+                setcookie( self::COOKIE_NAME, $url_token, $expire, COOKIEPATH, COOKIE_DOMAIN, $secure, false );
+                $_COOKIE[ self::COOKIE_NAME ] = $url_token;
+                return;
+            }
+        }
+
         $existing_token = $this->get_token_from_cookie();
-        
+
         if ( ! empty( $existing_token ) ) {
             return;
         }
-        
+
         $token = $this->generate_token();
-        
+
         $secure = is_ssl();
         $expire = time() + self::COOKIE_EXPIRATION;
-        
+
         setcookie(self::COOKIE_NAME, $token, $expire, COOKIEPATH, COOKIE_DOMAIN, $secure, false);
-        
+
         $_COOKIE[ self::COOKIE_NAME ] = $token;
     }
     

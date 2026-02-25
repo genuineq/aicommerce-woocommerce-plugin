@@ -58,21 +58,30 @@ class CartStorage {
         if ( empty( $guest_token ) ) {
             return array();
         }
-        
+
         $key = self::get_storage_key( $guest_token );
         $cart_data = get_option( $key, null );
-        
+
         if ( $cart_data === null ) {
             return array();
         }
-        
+
         // Check expiration
         if ( isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < time() ) {
             self::delete_cart( $guest_token );
             return array();
         }
-        
-        return isset( $cart_data['items'] ) ? $cart_data['items'] : array();
+
+        $items = isset( $cart_data['items'] ) ? $cart_data['items'] : array();
+
+        // Deduplicate items that share the same product_id + variation_id
+        // (can accumulate if different key formats were stored over time)
+        $deduped = self::deduplicate_items( $items );
+        if ( count( $deduped ) !== count( $items ) ) {
+            self::save_cart( $guest_token, $deduped );
+        }
+
+        return $deduped;
     }
     
     /**
@@ -111,33 +120,28 @@ class CartStorage {
         if ( empty( $guest_token ) || $product_id <= 0 || $quantity <= 0 ) {
             return false;
         }
-        
+
         $cart = self::get_cart( $guest_token );
-        
-        // Generate unique cart item key
-        $cart_item_key = self::generate_cart_item_key( $product_id, $variation_data );
-        
-        // Check if item already exists
-        $existing_index = self::find_item_index( $cart, $cart_item_key );
-        
+
+        // Match by product_id + variation_id to avoid duplicates from different key formats
+        $existing_index = self::find_item_by_product( $cart, $product_id, $variation_data );
+
         if ( $existing_index !== false ) {
-            // Update quantity
             $cart[ $existing_index ]['quantity'] += $quantity;
         } else {
-            // Add new item
             $cart[] = array(
-                'key'            => $cart_item_key,
+                'key'            => self::generate_cart_item_key( $product_id, $variation_data ),
                 'product_id'     => $product_id,
                 'quantity'       => $quantity,
                 'variation_data' => $variation_data,
                 'added_at'       => time(),
             );
         }
-        
+
         if ( self::save_cart( $guest_token, $cart ) ) {
             return $cart;
         }
-        
+
         return false;
     }
     
@@ -152,16 +156,73 @@ class CartStorage {
         if ( empty( $variation_data ) ) {
             return 'simple_' . $product_id;
         }
-        
+
         ksort( $variation_data );
         $variation_string = md5( wp_json_encode( $variation_data ) );
         return 'variation_' . $product_id . '_' . $variation_string;
     }
-    
+
     /**
-     * Find item index in cart by cart item key
+     * Find item index in cart by product_id and variation_id.
+     * More reliable than key-based lookup because keys may differ between
+     * the internal storage format and WooCommerce-generated MD5 hashes.
      *
-     * @param array  $cart Cart items
+     * @param array $cart           Cart items
+     * @param int   $product_id     Product ID
+     * @param array $variation_data Variation data
+     * @return int|false Item index or false if not found
+     */
+    private static function find_item_by_product( array $cart, int $product_id, array $variation_data = array() ) {
+        $variation_id = isset( $variation_data['variation_id'] ) ? (int) $variation_data['variation_id'] : 0;
+
+        foreach ( $cart as $index => $item ) {
+            if ( (int) ( $item['product_id'] ?? 0 ) !== $product_id ) {
+                continue;
+            }
+            $item_variation_id = isset( $item['variation_data']['variation_id'] )
+                ? (int) $item['variation_data']['variation_id']
+                : 0;
+            if ( $item_variation_id === $variation_id ) {
+                return $index;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Merge cart entries that share the same product_id + variation_id.
+     * Quantities are summed; the first encountered item's data is kept as base.
+     *
+     * @param array $items Raw cart items (may contain duplicates)
+     * @return array Deduplicated cart items
+     */
+    private static function deduplicate_items( array $items ): array {
+        $seen   = array(); // "product_id:variation_id" => index in $result
+        $result = array();
+
+        foreach ( $items as $item ) {
+            $product_id   = (int) ( $item['product_id'] ?? 0 );
+            $variation_id = isset( $item['variation_data']['variation_id'] )
+                ? (int) $item['variation_data']['variation_id']
+                : 0;
+            $sig = $product_id . ':' . $variation_id;
+
+            if ( isset( $seen[ $sig ] ) ) {
+                $result[ $seen[ $sig ] ]['quantity'] += (int) ( $item['quantity'] ?? 0 );
+            } else {
+                $seen[ $sig ]  = count( $result );
+                $result[]      = $item;
+            }
+        }
+
+        return array_values( $result );
+    }
+
+    /**
+     * Find item index in cart by cart item key (legacy helper, kept for internal use).
+     *
+     * @param array  $cart         Cart items
      * @param string $cart_item_key Cart item key
      * @return int|false Item index or false if not found
      */
@@ -171,7 +232,7 @@ class CartStorage {
                 return $index;
             }
         }
-        
+
         return false;
     }
     
@@ -204,9 +265,8 @@ class CartStorage {
         if ( empty( $guest_token ) || $product_id <= 0 ) {
             return false;
         }
-        $cart = self::get_cart( $guest_token );
-        $cart_item_key = self::generate_cart_item_key( $product_id, $variation_data );
-        $index = self::find_item_index( $cart, $cart_item_key );
+        $cart  = self::get_cart( $guest_token );
+        $index = self::find_item_by_product( $cart, $product_id, $variation_data );
         if ( $index === false ) {
             return $cart;
         }
@@ -286,29 +346,27 @@ class CartStorage {
         if ( $user_id <= 0 || $product_id <= 0 || $quantity <= 0 ) {
             return false;
         }
-        
+
         $cart = self::get_user_cart( $user_id );
-        
-        $cart_item_key = self::generate_cart_item_key( $product_id, $variation_data );
-        
-        $existing_index = self::find_item_index( $cart, $cart_item_key );
-        
+
+        $existing_index = self::find_item_by_product( $cart, $product_id, $variation_data );
+
         if ( $existing_index !== false ) {
             $cart[ $existing_index ]['quantity'] += $quantity;
         } else {
             $cart[] = array(
-                'key'            => $cart_item_key,
+                'key'            => self::generate_cart_item_key( $product_id, $variation_data ),
                 'product_id'     => $product_id,
                 'quantity'       => $quantity,
                 'variation_data' => $variation_data,
                 'added_at'       => time(),
             );
         }
-        
+
         if ( self::save_user_cart( $user_id, $cart ) ) {
             return $cart;
         }
-        
+
         return false;
     }
     
@@ -324,9 +382,8 @@ class CartStorage {
         if ( $user_id <= 0 || $product_id <= 0 ) {
             return false;
         }
-        $cart = self::get_user_cart( $user_id );
-        $cart_item_key = self::generate_cart_item_key( $product_id, $variation_data );
-        $index = self::find_item_index( $cart, $cart_item_key );
+        $cart  = self::get_user_cart( $user_id );
+        $index = self::find_item_by_product( $cart, $product_id, $variation_data );
         if ( $index === false ) {
             return $cart;
         }

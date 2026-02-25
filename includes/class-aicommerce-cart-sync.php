@@ -25,6 +25,7 @@ class CartSync {
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
         add_action( 'wp_login', array( $this, 'set_sync_flag_on_login' ), 10, 2 );
         add_action( 'woocommerce_load_cart_from_session', array( $this, 'sync_user_cart_after_wc_load' ), 20 );
+        add_action( 'woocommerce_load_cart_from_session', array( $this, 'sync_guest_cart_on_page_load' ), 25 );
         add_action( 'wp_loaded', array( $this, 'sync_user_cart_on_page_load' ), 30 );
         
         // Sync WC cart changes to user_meta (bidirectional sync)
@@ -34,6 +35,125 @@ class CartSync {
         add_action( 'woocommerce_cart_item_restored', array( $this, 'sync_wc_cart_to_user_meta' ), 20, 1 );
     }
     
+    /**
+     * Sync guest cart from cookie to WooCommerce session on every frontend page load.
+     *
+     * Reads the guest_token from the aicommerce_guest_token cookie, loads the cart
+     * stored in wp_options (populated by external API calls), and merges any missing
+     * items into the active WC session before the page is rendered.
+     * This makes the cart appear immediately without a client-side AJAX round-trip.
+     */
+    public function sync_guest_cart_on_page_load(): void {
+        if ( is_admin() ) {
+            return;
+        }
+
+        if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+            return;
+        }
+
+        if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
+            return;
+        }
+
+        if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
+            return;
+        }
+
+        if ( is_user_logged_in() ) {
+            return;
+        }
+
+        if ( ! isset( $_COOKIE['aicommerce_guest_token'] ) ) {
+            return;
+        }
+
+        $guest_token = sanitize_text_field( wp_unslash( $_COOKIE['aicommerce_guest_token'] ) );
+        if ( empty( $guest_token ) ) {
+            return;
+        }
+
+        if ( ! preg_match( '/^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $guest_token ) ) {
+            return;
+        }
+
+        static $synced = false;
+        if ( $synced ) {
+            return;
+        }
+        $synced = true;
+
+        $stored_cart = CartStorage::get_cart( $guest_token );
+        if ( empty( $stored_cart ) ) {
+            return;
+        }
+
+        if ( ! class_exists( 'WooCommerce' ) || ! function_exists( 'WC' ) ) {
+            return;
+        }
+
+        $wc_cart = WC()->cart;
+        if ( ! $wc_cart || ! is_a( $wc_cart, 'WC_Cart' ) ) {
+            return;
+        }
+
+        $added = false;
+
+        foreach ( $stored_cart as $item ) {
+            $product_id     = isset( $item['product_id'] )    ? absint( $item['product_id'] )  : 0;
+            $quantity       = isset( $item['quantity'] )       ? absint( $item['quantity'] )    : 1;
+            $variation_data = isset( $item['variation_data'] ) ? $item['variation_data']        : array();
+
+            if ( $product_id <= 0 ) {
+                continue;
+            }
+
+            $product = wc_get_product( $product_id );
+            if ( ! $product || ! $product->is_purchasable() ) {
+                continue;
+            }
+
+            $variation_id = 0;
+            if ( ! empty( $variation_data ) && isset( $variation_data['variation_id'] ) ) {
+                $variation_id = absint( $variation_data['variation_id'] );
+            }
+
+            $variation_data  = CartAPI::normalize_variation_data_for_wc( $product_id, $variation_data );
+            $variation_attrs = CartAPI::get_variation_attributes_for_add_to_cart( $variation_data, $product_id );
+
+            // Skip items already present in the WC cart
+            $found = false;
+            foreach ( $wc_cart->get_cart() as $cart_item ) {
+                if ( (int) $cart_item['product_id'] === $product_id &&
+                     (int) $cart_item['variation_id'] === $variation_id ) {
+                    $found = true;
+                    break;
+                }
+            }
+
+            if ( $found ) {
+                continue;
+            }
+
+            try {
+                $wc_cart->add_to_cart( $product_id, $quantity, $variation_id, $variation_attrs );
+                $added = true;
+            } catch ( \Exception $e ) {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+                    error_log( '[AICOM] guest sync add_to_cart exception: ' . $e->getMessage() . ' product_id=' . $product_id );
+                }
+            }
+        }
+
+        if ( $added ) {
+            $wc_cart->calculate_totals();
+
+            if ( WC()->session ) {
+                WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
+            }
+        }
+    }
+
     /**
      * Sync user cart on page load (for already logged in users)
      */
@@ -104,35 +224,44 @@ class CartSync {
             }
         }
         
-        $needs_sync_to_meta = false;
+        // Collect WC cart keys for items that are NOT in user_meta.
+        // user_meta is the source of truth for API-managed carts: instead of copying
+        // those items back into user_meta (which would undo API removals), we remove
+        // them from the WC session so the browser reflects the API state.
+        $wc_keys_not_in_user_meta = array();
         foreach ( $wc_cart->get_cart() as $cart_item_key => $cart_item ) {
-            $product_id = isset( $cart_item['product_id'] ) ? absint( $cart_item['product_id'] ) : 0;
-            $variation_id = isset( $cart_item['variation_id'] ) ? absint( $cart_item['variation_id'] ) : 0;
-            $variation_data = isset( $cart_item['variation'] ) ? $cart_item['variation'] : array();
-            
+            $product_id     = isset( $cart_item['product_id'] )   ? absint( $cart_item['product_id'] )   : 0;
+            $variation_id   = isset( $cart_item['variation_id'] ) ? absint( $cart_item['variation_id'] ) : 0;
+            $variation_data = isset( $cart_item['variation'] )     ? $cart_item['variation']              : array();
+
             $found = false;
             foreach ( $user_cart as $item ) {
-                if ( $item['product_id'] == $product_id && 
+                if ( $item['product_id'] == $product_id &&
                      ( isset( $item['variation_data']['variation_id'] ) ? absint( $item['variation_data']['variation_id'] ) : 0 ) == $variation_id &&
                      ( empty( $variation_data ) || $item['variation_data'] == $variation_data ) ) {
                     $found = true;
                     break;
                 }
             }
-            
+
             if ( ! $found ) {
-                $needs_sync_to_meta = true;
-                break;
+                $wc_keys_not_in_user_meta[] = $cart_item_key;
             }
         }
-        
+
         if ( $needs_sync_to_wc ) {
             $this->perform_cart_sync( $user_id, $user_cart, $wc_cart );
             $synced = true;
         }
-        
-        if ( $needs_sync_to_meta ) {
-            $this->update_user_cart_from_wc( $user_id, $wc_cart );
+
+        if ( ! empty( $wc_keys_not_in_user_meta ) ) {
+            foreach ( $wc_keys_not_in_user_meta as $key ) {
+                $wc_cart->remove_cart_item( $key );
+            }
+            $wc_cart->calculate_totals();
+            if ( WC()->session ) {
+                WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
+            }
             $synced = true;
         }
     }
@@ -395,7 +524,7 @@ class CartSync {
         
         wp_localize_script(
             'aicommerce-cart-sync',
-            'aicommerceCartSync',
+            'aicommerceCartSyncConfig',
             array(
                 'api_key' => Settings::get_api_key(),
                 'user_id' => $user_id,

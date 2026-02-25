@@ -10,6 +10,23 @@
     let sseConnection = null;
     let isSyncing = false;
 
+    const _configUserId = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig.user_id)
+        ? aicommerceCartSyncConfig.user_id
+        : null;
+
+    /**
+     * Check if a cart identifier (guest token or user ID) is available
+     */
+    function hasCartIdentifier() {
+        if (getGuestToken()) {
+            return true;
+        }
+        if (_configUserId) {
+            return true;
+        }
+        return false;
+    }
+
     /**
      * Get guest token
      */
@@ -30,28 +47,10 @@
         }
 
         const guestToken = getGuestToken();
-        let userId = null;
-        
-        if (typeof aicommerceCartSync !== 'undefined' && aicommerceCartSync.user_id) {
-            userId = aicommerceCartSync.user_id;
-        } else if (typeof wp !== 'undefined' && wp.api && wp.api.models && wp.api.models.User) {
-            try {
-                const currentUser = await wp.api.models.User.id(0).fetch();
-                if (currentUser && currentUser.id) {
-                    userId = currentUser.id;
-                }
-            } catch (e) {
-            }
-        }
+        const userId = _configUserId;
 
         if (!guestToken && !userId) {
-            if (typeof aicommerceCartSync !== 'undefined' && aicommerceCartSync.user_id) {
-                userId = aicommerceCartSync.user_id;
-            }
-            
-            if (!guestToken && !userId) {
-                return;
-            }
+            return;
         }
 
         isSyncing = true;
@@ -225,14 +224,11 @@
      * Initialize cart sync
      */
     function init() {
-        // Check for guest token or user ID
         const checkIdentifier = setInterval(() => {
             if (hasCartIdentifier()) {
                 clearInterval(checkIdentifier);
                 
-                // Sync immediately
                 syncCartToWCSession().then(() => {
-                    // Only connect SSE for guest tokens
                     const guestToken = getGuestToken();
                     if (guestToken) {
                         connectSSE();
@@ -243,8 +239,6 @@
 
         setTimeout(() => {
             clearInterval(checkIdentifier);
-            // Try to sync anyway after timeout (for logged in users)
-            // Only sync once, don't sync multiple times
             if (hasCartIdentifier() && !isSyncing) {
                 syncCartToWCSession();
             }

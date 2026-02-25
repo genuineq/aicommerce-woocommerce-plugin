@@ -508,32 +508,10 @@ class CartAPI {
             );
         }
         
-        $user_id = $user_id_int;
-        $removed = false;
-        
-        if ( class_exists( 'WooCommerce' ) && function_exists( 'WC' ) ) {
-            if ( ! did_action( 'woocommerce_load_cart_from_session' ) && function_exists( 'wc_load_cart' ) ) {
-                wc_load_cart();
-            }
-            $wc_cart = WC()->cart;
-            if ( $wc_cart && is_a( $wc_cart, 'WC_Cart' ) ) {
-                $variation_id = ! empty( $variation_data_array['variation_id'] ) ? absint( $variation_data_array['variation_id'] ) : 0;
-                foreach ( $wc_cart->get_cart() as $cart_item_key => $cart_item ) {
-                    if ( (int) $cart_item['product_id'] === $product_id && (int) $cart_item['variation_id'] === $variation_id ) {
-                        $wc_cart->remove_cart_item( $cart_item_key );
-                        $removed = true;
-                        break;
-                    }
-                }
-                if ( $removed ) {
-                    $wc_cart->calculate_totals();
-                    if ( WC()->session ) {
-                        WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
-                    }
-                }
-            }
-        }
-        
+        $user_id      = $user_id_int;
+        $variation_id = ! empty( $variation_data_array['variation_id'] ) ? absint( $variation_data_array['variation_id'] ) : 0;
+
+        // 1. Remove from our user_meta cart (source of truth for the API)
         $cart = CartStorage::remove_item_from_user_cart( $user_id, $product_id, $variation_data_array );
         if ( $cart === false ) {
             return new \WP_REST_Response(
@@ -545,8 +523,23 @@ class CartAPI {
                 500
             );
         }
+
+        // 2. Remove from WooCommerce persistent cart (user_meta) so the item does not reappear after the browser session expires and WC reloads from this meta.
+        $wc_persistent_key  = '_woocommerce_persistent_cart_' . get_current_blog_id();
+        $persistent_cart    = get_user_meta( $user_id, $wc_persistent_key, true );
+        if ( is_array( $persistent_cart ) && ! empty( $persistent_cart['cart'] ) ) {
+            foreach ( $persistent_cart['cart'] as $key => $cart_item ) {
+                if ( (int) ( $cart_item['product_id'] ?? 0 ) === $product_id &&
+                     (int) ( $cart_item['variation_id'] ?? 0 ) === $variation_id ) {
+                    unset( $persistent_cart['cart'][ $key ] );
+                    break;
+                }
+            }
+            update_user_meta( $user_id, $wc_persistent_key, $persistent_cart );
+        }
+
         $cart_count = CartStorage::get_user_cart_count( $user_id );
-        
+
         return new \WP_REST_Response(
             array(
                 'success'    => true,
