@@ -193,6 +193,31 @@ class CartStorage {
     }
     
     /**
+     * Remove one item from guest cart by product_id and optional variation_data
+     *
+     * @param string $guest_token   Guest token
+     * @param int    $product_id    Product ID
+     * @param array  $variation_data Variation data (optional, for variable products)
+     * @return array|false Updated cart items or false on failure
+     */
+    public static function remove_item( string $guest_token, int $product_id, array $variation_data = array() ) {
+        if ( empty( $guest_token ) || $product_id <= 0 ) {
+            return false;
+        }
+        $cart = self::get_cart( $guest_token );
+        $cart_item_key = self::generate_cart_item_key( $product_id, $variation_data );
+        $index = self::find_item_index( $cart, $cart_item_key );
+        if ( $index === false ) {
+            return $cart;
+        }
+        array_splice( $cart, $index, 1 );
+        if ( self::save_cart( $guest_token, $cart ) ) {
+            return $cart;
+        }
+        return false;
+    }
+    
+    /**
      * Delete cart for guest token
      *
      * @param string $guest_token Guest token
@@ -284,6 +309,31 @@ class CartStorage {
             return $cart;
         }
         
+        return false;
+    }
+    
+    /**
+     * Remove one item from user cart by product_id and optional variation_data
+     *
+     * @param int   $user_id        User ID
+     * @param int   $product_id     Product ID
+     * @param array $variation_data Variation data (optional, for variable products)
+     * @return array|false Updated cart items or false on failure
+     */
+    public static function remove_item_from_user_cart( int $user_id, int $product_id, array $variation_data = array() ) {
+        if ( $user_id <= 0 || $product_id <= 0 ) {
+            return false;
+        }
+        $cart = self::get_user_cart( $user_id );
+        $cart_item_key = self::generate_cart_item_key( $product_id, $variation_data );
+        $index = self::find_item_index( $cart, $cart_item_key );
+        if ( $index === false ) {
+            return $cart;
+        }
+        array_splice( $cart, $index, 1 );
+        if ( self::save_user_cart( $user_id, $cart ) ) {
+            return $cart;
+        }
         return false;
     }
     

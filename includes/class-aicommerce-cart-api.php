@@ -62,6 +62,30 @@ class CartAPI {
                 'permission_callback' => '__return_true',
             )
         );
+        
+        // Remove from cart endpoint
+        register_rest_route(
+            $namespace,
+            '/cart/remove',
+            array(
+                'methods'             => 'POST',
+                'callback'            => array( $this, 'remove_from_cart' ),
+                'permission_callback' => '__return_true',
+                'args'                => array(
+                    'product_id'     => array(
+                        'description' => __( 'Product ID to remove', 'aicommerce' ),
+                        'type'        => 'integer',
+                        'required'    => true,
+                        'minimum'     => 1,
+                    ),
+                    'variation_data' => array(
+                        'description' => __( 'Variation data for variable products (must include variation_id)', 'aicommerce' ),
+                        'type'        => 'object',
+                        'required'    => false,
+                    ),
+                ),
+            )
+        );
     }
     
     /**
@@ -370,6 +394,163 @@ class CartAPI {
             array(
                 'success'    => true,
                 'cart'       => $cart,
+                'cart_count' => $cart_count,
+            ),
+            200
+        );
+    }
+    
+    /**
+     * Remove from cart endpoint
+     * Supports both guest_token and user_id
+     */
+    public function remove_from_cart( \WP_REST_Request $request ): \WP_REST_Response {
+        $validation = APIValidator::validate_request( $request );
+        if ( ! $validation['valid'] ) {
+            return APIValidator::error_response( $validation );
+        }
+        
+        $guest_token    = $request->get_param( 'guest_token' );
+        $user_id_param  = $request->get_param( 'user_id' );
+        $product_id     = absint( $request->get_param( 'product_id' ) );
+        $variation_data = $request->get_param( 'variation_data' );
+        
+        if ( $product_id <= 0 ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'invalid_product_id',
+                    'message' => __( 'Valid product_id is required.', 'aicommerce' ),
+                ),
+                400
+            );
+        }
+        
+        $user_id_int = null;
+        if ( ! empty( $user_id_param ) || ( isset( $user_id_param ) && $user_id_param !== '' && $user_id_param !== null ) ) {
+            $user_id_int = absint( $user_id_param );
+            if ( $user_id_int <= 0 ) {
+                $user_id_int = null;
+            }
+        }
+        
+        if ( empty( $guest_token ) && empty( $user_id_int ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'missing_identifier',
+                    'message' => __( 'Either guest_token or user_id is required.', 'aicommerce' ),
+                ),
+                400
+            );
+        }
+        
+        if ( ! empty( $guest_token ) && ! empty( $user_id_int ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'conflicting_identifiers',
+                    'message' => __( 'Provide either guest_token or user_id, not both.', 'aicommerce' ),
+                ),
+                400
+            );
+        }
+        
+        if ( ! empty( $guest_token ) && ! $this->validate_guest_token( $guest_token ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'invalid_guest_token',
+                    'message' => __( 'Invalid guest_token format.', 'aicommerce' ),
+                ),
+                400
+            );
+        }
+        
+        if ( ! empty( $user_id_int ) && ! get_user_by( 'id', $user_id_int ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'invalid_user_id',
+                    'message' => __( 'Invalid user ID.', 'aicommerce' ),
+                ),
+                400
+            );
+        }
+        
+        $variation_data_array = is_array( $variation_data ) ? $variation_data : array();
+        
+        if ( ! empty( $guest_token ) ) {
+            $cart = CartStorage::remove_item( $guest_token, $product_id, $variation_data_array );
+            if ( $cart === false ) {
+                return new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'remove_failed',
+                        'message' => __( 'Failed to remove item from cart.', 'aicommerce' ),
+                    ),
+                    500
+                );
+            }
+            $cart_count = CartStorage::get_cart_count( $guest_token );
+            SSE::send_event( $guest_token, 'cart_updated', array(
+                'action'     => 'item_removed',
+                'product_id' => $product_id,
+                'cart_count' => $cart_count,
+            ) );
+            return new \WP_REST_Response(
+                array(
+                    'success'    => true,
+                    'message'    => __( 'Item removed from cart.', 'aicommerce' ),
+                    'cart_count' => $cart_count,
+                ),
+                200
+            );
+        }
+        
+        $user_id = $user_id_int;
+        $removed = false;
+        
+        if ( class_exists( 'WooCommerce' ) && function_exists( 'WC' ) ) {
+            if ( ! did_action( 'woocommerce_load_cart_from_session' ) && function_exists( 'wc_load_cart' ) ) {
+                wc_load_cart();
+            }
+            $wc_cart = WC()->cart;
+            if ( $wc_cart && is_a( $wc_cart, 'WC_Cart' ) ) {
+                $variation_id = ! empty( $variation_data_array['variation_id'] ) ? absint( $variation_data_array['variation_id'] ) : 0;
+                foreach ( $wc_cart->get_cart() as $cart_item_key => $cart_item ) {
+                    if ( (int) $cart_item['product_id'] === $product_id && (int) $cart_item['variation_id'] === $variation_id ) {
+                        $wc_cart->remove_cart_item( $cart_item_key );
+                        $removed = true;
+                        break;
+                    }
+                }
+                if ( $removed ) {
+                    $wc_cart->calculate_totals();
+                    if ( WC()->session ) {
+                        WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
+                    }
+                }
+            }
+        }
+        
+        $cart = CartStorage::remove_item_from_user_cart( $user_id, $product_id, $variation_data_array );
+        if ( $cart === false ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'remove_failed',
+                    'message' => __( 'Failed to remove item from cart.', 'aicommerce' ),
+                ),
+                500
+            );
+        }
+        $cart_count = CartStorage::get_user_cart_count( $user_id );
+        
+        return new \WP_REST_Response(
+            array(
+                'success'    => true,
+                'message'    => __( 'Item removed from cart.', 'aicommerce' ),
                 'cart_count' => $cart_count,
             ),
             200

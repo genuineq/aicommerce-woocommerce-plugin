@@ -96,6 +96,7 @@ class SwaggerAPI {
                 '/products/search' => $this->get_search_products_endpoint(),
                 '/cart/add'        => $this->get_cart_add_endpoint(),
                 '/cart'            => $this->get_cart_get_endpoint(),
+                '/cart/remove'     => $this->get_cart_remove_endpoint(),
             ),
             'components' => array(
                 'securitySchemes' => array(
@@ -888,6 +889,90 @@ class SwaggerAPI {
                     ),
                     '500' => array(
                         'description' => 'WooCommerce not available',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+    
+    /**
+     * Get remove from cart endpoint specification
+     */
+    private function get_cart_remove_endpoint(): array {
+        return array(
+            'post' => array(
+                'tags'        => array( 'Cart' ),
+                'summary'     => 'Remove item from cart',
+                'description' => 'Remove a product from cart by guest_token or user_id. Provide either guest_token or user_id, not both. For variable products include variation_data with variation_id.',
+                'security'    => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'requestBody' => array(
+                    'required' => true,
+                    'content'  => array(
+                        'application/json' => array(
+                            'schema' => array(
+                                'type'       => 'object',
+                                'required'   => array( 'product_id' ),
+                                'properties' => array(
+                                    'guest_token'    => array(
+                                        'type'        => 'string',
+                                        'description' => 'Guest token for cart identification (required if user_id not provided)',
+                                        'example'     => 'guest_1700000000_abc123xyz_1a2b3c4d',
+                                    ),
+                                    'user_id'        => array(
+                                        'type'        => 'integer',
+                                        'description' => 'User ID for cart identification (required if guest_token not provided)',
+                                        'example'     => 1,
+                                    ),
+                                    'product_id'     => array(
+                                        'type'        => 'integer',
+                                        'description' => 'Product ID to remove from cart',
+                                        'example'     => 123,
+                                    ),
+                                    'variation_data' => array(
+                                        'type'        => 'object',
+                                        'description' => 'For variable products: must include variation_id to identify the line item',
+                                        'example'     => array( 'variation_id' => 456 ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'Item removed successfully',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success'    => array( 'type' => 'boolean', 'example' => true ),
+                                        'message'    => array( 'type' => 'string', 'example' => 'Item removed from cart.' ),
+                                        'cart_count' => array( 'type' => 'integer', 'example' => 2 ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Missing identifier, invalid product_id, or conflicting parameters',
+                        'content'    => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '500' => array(
+                        'description' => 'Remove failed',
                         'content'    => array(
                             'application/json' => array(
                                 'schema' => array( '$ref' => '#/components/schemas/Error' ),
