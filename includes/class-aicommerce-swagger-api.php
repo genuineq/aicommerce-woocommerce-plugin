@@ -97,6 +97,7 @@ class SwaggerAPI {
                 '/cart/add'        => $this->get_cart_add_endpoint(),
                 '/cart'            => $this->get_cart_get_endpoint(),
                 '/cart/remove'     => $this->get_cart_remove_endpoint(),
+                '/user'            => $this->get_user_endpoint(),
             ),
             'components' => array(
                 'securitySchemes' => array(
@@ -789,10 +790,20 @@ class SwaggerAPI {
                                             'items' => array(
                                                 'type'       => 'object',
                                                 'properties' => array(
-                                                    'cart_item_key' => array( 'type' => 'string' ),
-                                                    'product_id'    => array( 'type' => 'integer' ),
-                                                    'quantity'       => array( 'type' => 'integer' ),
+                                                    'key'            => array( 'type' => 'string', 'example' => 'simple_4142' ),
+                                                    'product_id'     => array( 'type' => 'integer', 'example' => 4142 ),
+                                                    'quantity'       => array( 'type' => 'integer', 'example' => 2 ),
                                                     'variation_data' => array( 'type' => 'object' ),
+                                                    'added_at'       => array( 'type' => 'integer', 'example' => 1772010101 ),
+                                                    'product_details' => array(
+                                                        'type'       => 'object',
+                                                        'properties' => array(
+                                                            'name'  => array( 'type' => 'string', 'example' => 'Product Name' ),
+                                                            'sku'   => array( 'type' => 'string', 'example' => 'SKU-001' ),
+                                                            'image' => array( 'type' => 'string', 'format' => 'uri', 'example' => 'https://example.com/image.jpg' ),
+                                                            'url'   => array( 'type' => 'string', 'format' => 'uri', 'example' => 'https://example.com/product/slug/' ),
+                                                        ),
+                                                    ),
                                                 ),
                                             ),
                                         ),
@@ -976,6 +987,128 @@ class SwaggerAPI {
                         'content'    => array(
                             'application/json' => array(
                                 'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+
+    /**
+     * Get user endpoint specification
+     */
+    private function get_user_endpoint(): array {
+        return array(
+            'get' => array(
+                'tags'        => array( 'Users' ),
+                'summary'     => 'Get user information',
+                'description' => 'Returns full user profile including WooCommerce billing/shipping addresses and order statistics.',
+                'security'    => array(
+                    array( 'apiKey' => array() ),
+                    array( 'apiSignature' => array() ),
+                    array( 'apiTimestamp' => array() ),
+                ),
+                'parameters' => array(
+                    array(
+                        'name'        => 'user_id',
+                        'in'          => 'query',
+                        'required'    => true,
+                        'description' => 'WordPress user ID',
+                        'schema'      => array(
+                            'type'    => 'integer',
+                            'example' => 1,
+                        ),
+                    ),
+                ),
+                'responses' => array(
+                    '200' => array(
+                        'description' => 'User retrieved successfully',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array(
+                                    'type'       => 'object',
+                                    'properties' => array(
+                                        'success' => array( 'type' => 'boolean', 'example' => true ),
+                                        'user'    => array(
+                                            'type'       => 'object',
+                                            'properties' => array(
+                                                'id'            => array( 'type' => 'integer', 'example' => 1 ),
+                                                'username'      => array( 'type' => 'string', 'example' => 'john' ),
+                                                'email'         => array( 'type' => 'string', 'format' => 'email', 'example' => 'john@example.com' ),
+                                                'display_name'  => array( 'type' => 'string', 'example' => 'John Doe' ),
+                                                'first_name'    => array( 'type' => 'string', 'example' => 'John' ),
+                                                'last_name'     => array( 'type' => 'string', 'example' => 'Doe' ),
+                                                'roles'         => array( 'type' => 'array', 'items' => array( 'type' => 'string' ), 'example' => array( 'customer' ) ),
+                                                'registered_at' => array( 'type' => 'string', 'example' => '2024-01-15 10:30:00' ),
+                                                'avatar_url'    => array( 'type' => 'string', 'format' => 'uri' ),
+                                                'billing'       => array(
+                                                    'type'       => 'object',
+                                                    'properties' => array(
+                                                        'first_name' => array( 'type' => 'string' ),
+                                                        'last_name'  => array( 'type' => 'string' ),
+                                                        'company'    => array( 'type' => 'string' ),
+                                                        'address_1'  => array( 'type' => 'string' ),
+                                                        'address_2'  => array( 'type' => 'string' ),
+                                                        'city'       => array( 'type' => 'string' ),
+                                                        'state'      => array( 'type' => 'string' ),
+                                                        'postcode'   => array( 'type' => 'string' ),
+                                                        'country'    => array( 'type' => 'string', 'example' => 'US' ),
+                                                        'email'      => array( 'type' => 'string', 'format' => 'email' ),
+                                                        'phone'      => array( 'type' => 'string' ),
+                                                    ),
+                                                ),
+                                                'shipping' => array(
+                                                    'type'       => 'object',
+                                                    'properties' => array(
+                                                        'first_name' => array( 'type' => 'string' ),
+                                                        'last_name'  => array( 'type' => 'string' ),
+                                                        'company'    => array( 'type' => 'string' ),
+                                                        'address_1'  => array( 'type' => 'string' ),
+                                                        'address_2'  => array( 'type' => 'string' ),
+                                                        'city'       => array( 'type' => 'string' ),
+                                                        'state'      => array( 'type' => 'string' ),
+                                                        'postcode'   => array( 'type' => 'string' ),
+                                                        'country'    => array( 'type' => 'string', 'example' => 'US' ),
+                                                        'phone'      => array( 'type' => 'string' ),
+                                                    ),
+                                                ),
+                                                'orders' => array(
+                                                    'type'       => 'object',
+                                                    'properties' => array(
+                                                        'total_orders'        => array( 'type' => 'integer', 'example' => 5 ),
+                                                        'total_spent'         => array( 'type' => 'number', 'format' => 'float', 'example' => 349.95 ),
+                                                        'average_order_value' => array( 'type' => 'number', 'format' => 'float', 'example' => 69.99 ),
+                                                        'currency'            => array( 'type' => 'string', 'example' => 'USD' ),
+                                                        'last_order_id'       => array( 'type' => 'integer', 'example' => 1042, 'nullable' => true ),
+                                                        'last_order_date'     => array( 'type' => 'string', 'example' => '2026-02-20 14:22:10', 'nullable' => true ),
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    '400' => array(
+                        'description' => 'Missing or invalid user_id',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                            ),
+                        ),
+                    ),
+                    '404' => array(
+                        'description' => 'User not found',
+                        'content'     => array(
+                            'application/json' => array(
+                                'schema' => array( '$ref' => '#/components/schemas/Error' ),
+                                'example' => array(
+                                    'success' => false,
+                                    'code'    => 'user_not_found',
+                                    'message' => 'User not found.',
+                                ),
                             ),
                         ),
                     ),
