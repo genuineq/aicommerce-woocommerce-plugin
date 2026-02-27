@@ -220,6 +220,7 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-api-validator.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-user-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-swagger-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
@@ -231,6 +232,7 @@ class AICommerce {
         // Initialize APIs
         new \AICommerce\AuthAPI();
         new \AICommerce\ProductAPI();
+        new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
         new \AICommerce\SwaggerAPI();
         new \AICommerce\SSE();

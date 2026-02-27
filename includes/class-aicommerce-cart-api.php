@@ -374,10 +374,10 @@ class CartAPI {
         }
         
         if ( ! empty( $guest_token ) ) {
-            $cart = CartStorage::get_cart( $guest_token );
+            $cart       = CartStorage::get_cart( $guest_token );
             $cart_count = CartStorage::get_cart_count( $guest_token );
         } elseif ( ! empty( $user_id ) ) {
-            $cart = CartStorage::get_user_cart( $user_id );
+            $cart       = CartStorage::get_user_cart( $user_id );
             $cart_count = CartStorage::get_user_cart_count( $user_id );
         } else {
             return new \WP_REST_Response(
@@ -389,7 +389,9 @@ class CartAPI {
                 400
             );
         }
-        
+
+        $cart = $this->enrich_cart_items( $cart );
+
         return new \WP_REST_Response(
             array(
                 'success'    => true,
@@ -398,6 +400,55 @@ class CartAPI {
             ),
             200
         );
+    }
+
+    /**
+     * Enrich cart items with product details: name, SKU, image URL, product URL.
+     * For variable products the variation's own image is used when available,
+     * falling back to the parent product's featured image.
+     *
+     * @param array $items Raw cart items from storage
+     * @return array Cart items with added product_details field
+     */
+    private function enrich_cart_items( array $items ): array {
+        foreach ( $items as &$item ) {
+            $product_id   = isset( $item['product_id'] ) ? absint( $item['product_id'] ) : 0;
+            $variation_id = isset( $item['variation_data']['variation_id'] )
+                ? absint( $item['variation_data']['variation_id'] )
+                : 0;
+
+            if ( $product_id <= 0 ) {
+                $item['product_details'] = null;
+                continue;
+            }
+
+            // Use variation product when available so we get the right SKU / image
+            $product_to_use = $variation_id > 0 ? wc_get_product( $variation_id ) : null;
+            $parent_product = wc_get_product( $product_id );
+
+            if ( ! $parent_product ) {
+                $item['product_details'] = null;
+                continue;
+            }
+
+            $active_product = $product_to_use ?: $parent_product;
+
+            // Image: prefer variation image, fall back to parent featured image
+            $image_id  = $active_product->get_image_id();
+            $image_url = $image_id
+                ? wp_get_attachment_image_url( $image_id, 'woocommerce_single' )
+                : wc_placeholder_img_src( 'woocommerce_single' );
+
+            $item['product_details'] = array(
+                'name'  => $parent_product->get_name(),
+                'sku'   => $active_product->get_sku() ?: $parent_product->get_sku(),
+                'image' => $image_url ?: null,
+                'url'   => get_permalink( $product_id ) ?: null,
+            );
+        }
+        unset( $item );
+
+        return $items;
     }
     
     /**
