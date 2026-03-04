@@ -228,7 +228,8 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-sync.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
-        
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-updater.php';
+
         // Initialize APIs
         new \AICommerce\AuthAPI();
         new \AICommerce\ProductAPI();
@@ -241,6 +242,9 @@ class AICommerce {
         new \AICommerce\Iframe();
         new \AICommerce\GuestToken();
         new \AICommerce\CartSync();
+
+        // Auto-updater
+        new \AICommerce\Updater();
     }
     
     /**
