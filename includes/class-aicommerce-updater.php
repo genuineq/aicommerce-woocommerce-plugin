@@ -33,7 +33,7 @@ class Updater {
     /**
      * Remote info.json URL
      */
-    private string $update_url = 'https://api.genuineq.com/aicommerce/info.json';
+    private string $update_url = 'https://api.ai.genuineq.com/woocommerce/info.json';
 
     /**
      * Current plugin version
