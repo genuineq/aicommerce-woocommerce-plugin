@@ -160,8 +160,12 @@ class UserAPI {
         $average      = $total_orders > 0 ? round( $total_spent / $total_orders, 2 ) : 0.0;
 
         $last_order      = wc_get_customer_last_order( $user_id );
-        $last_order_date = $last_order ? $last_order->get_date_created()?->date( 'Y-m-d H:i:s' ) : null;
         $last_order_id   = $last_order ? $last_order->get_id() : null;
+        $last_order_date = null;
+        if ( $last_order ) {
+            $date_created    = $last_order->get_date_created();
+            $last_order_date = $date_created ? $date_created->date( 'Y-m-d H:i:s' ) : null;
+        }
 
         return array(
             'total_orders'        => $total_orders,
