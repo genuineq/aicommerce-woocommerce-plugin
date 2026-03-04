@@ -3,7 +3,7 @@
  * Plugin Name: AICommerce
  * Plugin URI: https://example.com/aicommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.4.0
+ * Version: 1.4.1
  * Author: Your Name
  * Author URI: https://example.com
  * License: GPL v2 or later
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.4.0' );
+define( 'AICOMMERCE_VERSION', '1.4.1' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
