@@ -1,11 +1,10 @@
 <?php
 /**
  * Plugin Name: AICommerce
- * Plugin URI: https://example.com/aicommerce
  * Description: AI-powered commerce plugin for WooCommerce
  * Version: 1.4.1
- * Author: Your Name
- * Author URI: https://example.com
+ * Author: Genuineq
+ * Author URI: https://genuineq.com
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: aicommerce
@@ -221,7 +220,6 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-user-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-swagger-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-sse.php';
@@ -235,7 +233,6 @@ class AICommerce {
         new \AICommerce\ProductAPI();
         new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
-        new \AICommerce\SwaggerAPI();
         new \AICommerce\SSE();
         
         // Initialize frontend features
