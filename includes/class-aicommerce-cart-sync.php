@@ -526,8 +526,10 @@ class CartSync {
             'aicommerce-cart-sync',
             'aicommerceCartSyncConfig',
             array(
-                'api_key' => Settings::get_api_key(),
-                'user_id' => $user_id,
+                'api_key'     => Settings::get_api_key(),
+                'user_id'     => $user_id,
+                'enable_sse'  => (bool) apply_filters( 'aicommerce_enable_sse', false ),
+                'sync_cooldown_ms' => 5000,
             )
         );
     }

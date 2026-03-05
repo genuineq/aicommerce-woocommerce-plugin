@@ -674,6 +674,9 @@ class CartAPI {
                 200
             );
         }
+
+        $identifier = ! empty( $guest_token ) ? 'guest_' . $guest_token : 'user_' . (int) $user_id;
+        $cart_signature = md5( wp_json_encode( $guest_cart ) );
         
         if ( ! class_exists( 'WooCommerce' ) ) {
             return new \WP_REST_Response(
@@ -742,9 +745,25 @@ class CartAPI {
                 500
             );
         }
+
+        if ( WC()->session ) {
+            $last_signature = WC()->session->get( 'aicommerce_last_sync_signature_' . $identifier );
+            if ( is_string( $last_signature ) && hash_equals( $last_signature, $cart_signature ) ) {
+                return new \WP_REST_Response(
+                    array(
+                        'success'        => true,
+                        'message'        => __( 'Cart already synchronized.', 'aicommerce' ),
+                        'synced'         => false,
+                        'skipped_reason' => 'no_changes',
+                    ),
+                    200
+                );
+            }
+        }
         
         $synced_count = 0;
         $errors = array();
+        $cart_changed = false;
         
         foreach ( $guest_cart as $item ) {
             $product_id = isset( $item['product_id'] ) ? absint( $item['product_id'] ) : 0;
@@ -788,12 +807,14 @@ class CartAPI {
                 if ( $existing_quantity < $quantity ) {
                     $cart->set_quantity( $existing_cart_item_key, $quantity );
                     $synced_count++;
+                    $cart_changed = true;
                 }
             } else {
                 $cart_item_key = $cart->add_to_cart( $product_id, $quantity, $variation_id, $variation_attrs );
                 
                 if ( $cart_item_key ) {
                     $synced_count++;
+                    $cart_changed = true;
                 } else {
                     $errors[] = sprintf(
                         __( 'Failed to add product ID %d to cart.', 'aicommerce' ),
@@ -822,10 +843,16 @@ class CartAPI {
             CartStorage::save_user_cart( $user_id, $wc_cart_items );
         }
         
-        $cart->calculate_totals();
-        
+        if ( $cart_changed ) {
+            $cart->calculate_totals();
+
+            if ( WC()->session ) {
+                WC()->session->set( 'cart', $cart->get_cart_for_session() );
+            }
+        }
+
         if ( WC()->session ) {
-            WC()->session->set( 'cart', $cart->get_cart_for_session() );
+            WC()->session->set( 'aicommerce_last_sync_signature_' . $identifier, $cart_signature );
         }
         
         return new \WP_REST_Response(
@@ -837,6 +864,7 @@ class CartAPI {
                 ),
                 'synced_count' => $synced_count,
                 'total_items'  => count( $guest_cart ),
+                'synced'       => $cart_changed,
                 'errors'       => $errors,
             ),
             200

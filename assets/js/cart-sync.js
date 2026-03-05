@@ -9,10 +9,16 @@
     const API_BASE = '/wp-json/aicommerce/v1';
     let sseConnection = null;
     let isSyncing = false;
+    let lastSyncAt = 0;
+    let reconnectTimeout = null;
 
     const _configUserId = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig.user_id)
         ? aicommerceCartSyncConfig.user_id
         : null;
+    const _enableSSE = !!(typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig.enable_sse);
+    const _syncCooldownMs = (typeof aicommerceCartSyncConfig !== 'undefined' && Number.isFinite(Number(aicommerceCartSyncConfig.sync_cooldown_ms)))
+        ? Number(aicommerceCartSyncConfig.sync_cooldown_ms)
+        : 5000;
 
     /**
      * Check if a cart identifier (guest token or user ID) is available
@@ -41,7 +47,7 @@
      * Sync cart to WooCommerce session
      * Supports both guest_token and user_id
      */
-    async function syncCartToWCSession() {
+    async function syncCartToWCSession(force = false) {
         if (isSyncing) {
             return;
         }
@@ -53,7 +59,13 @@
             return;
         }
 
+        const now = Date.now();
+        if (!force && now - lastSyncAt < _syncCooldownMs) {
+            return;
+        }
+
         isSyncing = true;
+        lastSyncAt = now;
 
         try {
             const syncData = {};
@@ -75,7 +87,7 @@
             const data = await response.json();
 
             if (data && data.success) {
-                if (typeof jQuery !== 'undefined' && jQuery.fn.trigger) {
+                if (data.synced && typeof jQuery !== 'undefined' && jQuery.fn.trigger) {
                     jQuery(document.body).trigger('wc_fragment_refresh');
                     jQuery(document.body).trigger('update_checkout');
                 }
@@ -112,7 +124,7 @@
             switch (event.type) {
                 case 'cart_updated':
                     if (eventData.action === 'item_added') {
-                        syncCartToWCSession();
+                        syncCartToWCSession(true);
                         updateCartUI(eventData);
                     }
                     break;
@@ -125,7 +137,7 @@
                 case 'error':
                 case 'timeout':
                     console.error('AICommerce: SSE error/timeout', eventData);
-                    setTimeout(connectSSE, 5000);
+                    scheduleReconnect();
                     break;
             }
         } catch (error) {
@@ -168,10 +180,26 @@
         }));
     }
 
+    function scheduleReconnect() {
+        if (!_enableSSE) {
+            return;
+        }
+        if (reconnectTimeout) {
+            return;
+        }
+        reconnectTimeout = setTimeout(() => {
+            reconnectTimeout = null;
+            connectSSE();
+        }, 5000);
+    }
+
     /**
      * Connect to SSE endpoint
      */
     function connectSSE() {
+        if (!_enableSSE) {
+            return;
+        }
         const guestToken = getGuestToken();
         if (!guestToken) {
             console.warn('AICommerce: Guest token not available for SSE');
@@ -195,7 +223,7 @@
             sseConnection.onerror = function(error) {
                 console.error('AICommerce: SSE connection error', error);
                 
-                setTimeout(connectSSE, 5000);
+                scheduleReconnect();
             };
 
             sseConnection.addEventListener('cart_updated', handleCartEvent);
@@ -213,6 +241,10 @@
      * Disconnect SSE
      */
     function disconnectSSE() {
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+        }
         if (sseConnection) {
             sseConnection.close();
             sseConnection = null;
@@ -228,10 +260,12 @@
             if (hasCartIdentifier()) {
                 clearInterval(checkIdentifier);
                 
-                syncCartToWCSession().then(() => {
-                    const guestToken = getGuestToken();
-                    if (guestToken) {
-                        connectSSE();
+                syncCartToWCSession(true).then(() => {
+                    if (_enableSSE) {
+                        const guestToken = getGuestToken();
+                        if (guestToken) {
+                            connectSSE();
+                        }
                     }
                 });
             }
@@ -250,10 +284,10 @@
             } else {
                 if (hasCartIdentifier()) {
                     const guestToken = getGuestToken();
-                    if (guestToken) {
+                    if (_enableSSE && guestToken) {
                         connectSSE();
                     }
-                    syncCartToWCSession();
+                    syncCartToWCSession(true);
                 }
             }
         });

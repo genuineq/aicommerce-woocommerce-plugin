@@ -233,7 +233,9 @@ class AICommerce {
         new \AICommerce\ProductAPI();
         new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
-        new \AICommerce\SSE();
+        if ( apply_filters( 'aicommerce_enable_sse', false ) ) {
+            new \AICommerce\SSE();
+        }
         
         // Initialize frontend features
         new \AICommerce\Iframe();
