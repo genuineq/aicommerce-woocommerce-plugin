@@ -1,260 +1,132 @@
 /**
  * AICommerce Cart Synchronization
- * Syncs guest cart with WooCommerce session and listens for real-time updates via SSE
+ * Syncs guest/user cart with WooCommerce session.
+ * Polls /cart/hash while AI popup is open; one-time sync on page load, focus, visibility.
  */
 
 (function() {
     'use strict';
 
     const API_BASE = '/wp-json/aicommerce/v1';
-    let sseConnection = null;
-    let isSyncing = false;
+    let isSyncing  = false;
+    let pollTimer  = null;
+    let lastHash   = null;
 
     const _configUserId = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig.user_id)
         ? aicommerceCartSyncConfig.user_id
         : null;
 
-    /**
-     * Check if a cart identifier (guest token or user ID) is available
-     */
-    function hasCartIdentifier() {
-        if (getGuestToken()) {
-            return true;
-        }
-        if (_configUserId) {
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Get guest token
-     */
     function getGuestToken() {
-        if (typeof getAicommerceGuestToken === 'function') {
-            return getAicommerceGuestToken();
-        }
-        return null;
+        return typeof getAicommerceGuestToken === 'function' ? getAicommerceGuestToken() : null;
+    }
+
+    function hasCartIdentifier() {
+        return !!(getGuestToken() || _configUserId);
     }
 
     /**
-     * Sync cart to WooCommerce session
-     * Supports both guest_token and user_id
+     * Lightweight hash check — no writes, < 10ms server-side.
+     * Returns null on error.
+     */
+    async function fetchCartHash() {
+        const guestToken = getGuestToken();
+        let url = API_BASE + '/cart/hash';
+        if (guestToken) {
+            url += '?guest_token=' + encodeURIComponent(guestToken);
+        } else if (_configUserId) {
+            url += '?user_id=' + encodeURIComponent(_configUserId);
+        } else {
+            return null;
+        }
+
+        try {
+            const res  = await fetch(url, { credentials: 'same-origin' });
+            const data = await res.json();
+            return data.hash || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Sync cart to WooCommerce session and refresh mini-cart fragments.
      */
     async function syncCartToWCSession() {
-        if (isSyncing) {
-            return;
-        }
+        if (isSyncing) return;
 
         const guestToken = getGuestToken();
-        const userId = _configUserId;
-
-        if (!guestToken && !userId) {
-            return;
-        }
+        if (!guestToken && !_configUserId) return;
 
         isSyncing = true;
 
         try {
-            const syncData = {};
-            if (guestToken) {
-                syncData.guest_token = guestToken;
-            } else if (userId) {
-                syncData.user_id = userId;
-            }
+            const body = {};
+            if (guestToken)    body.guest_token = guestToken;
+            else if (_configUserId) body.user_id = _configUserId;
 
-            const response = await fetch(API_BASE + '/cart/sync', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+            const res  = await fetch(API_BASE + '/cart/sync', {
+                method:      'POST',
+                headers:     { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
-                body: JSON.stringify(syncData),
+                body:        JSON.stringify(body),
             });
-
-            const data = await response.json();
+            const data = await res.json();
 
             if (data && data.success) {
-                if (typeof jQuery !== 'undefined' && jQuery.fn.trigger) {
+                if (typeof jQuery !== 'undefined') {
                     jQuery(document.body).trigger('wc_fragment_refresh');
                     jQuery(document.body).trigger('update_checkout');
                 }
-
-                window.dispatchEvent(new CustomEvent('aicommerce_cart_synced', {
-                    detail: data
-                }));
-
-                console.log('AICommerce: Cart synced to WC session', data);
+                window.dispatchEvent(new CustomEvent('aicommerce_cart_synced', { detail: data }));
             }
-        } catch (error) {
-            console.error('AICommerce: Error syncing cart', error);
+        } catch (e) {
+            // silent
         } finally {
             isSyncing = false;
         }
     }
 
     /**
-     * Handle cart event from SSE
+     * Start polling /cart/hash every 5s.
+     * Records initial hash on first call; syncs only when hash changes.
      */
-    function handleCartEvent(event) {
-        if (!event || !event.data) {
-            return;
-        }
+    async function startPolling() {
+        if (pollTimer) return;
 
-        try {
-            const eventData = JSON.parse(event.data);
-            console.log('AICommerce: Cart event received', eventData);
+        // Capture baseline hash so first interval only fires on real change
+        lastHash = await fetchCartHash();
 
-            window.dispatchEvent(new CustomEvent('aicommerce_cart_event', {
-                detail: eventData
-            }));
-
-            switch (event.type) {
-                case 'cart_updated':
-                    if (eventData.action === 'item_added') {
-                        syncCartToWCSession();
-                        updateCartUI(eventData);
-                    }
-                    break;
-                case 'ping':
-                    break;
-                case 'connected':
-                    console.log('AICommerce: SSE connected', eventData);
-                    syncCartToWCSession();
-                    break;
-                case 'error':
-                case 'timeout':
-                    console.error('AICommerce: SSE error/timeout', eventData);
-                    setTimeout(connectSSE, 5000);
-                    break;
+        pollTimer = setInterval(async () => {
+            if (document.hidden) return;
+            const hash = await fetchCartHash();
+            if (hash && hash !== lastHash) {
+                lastHash = hash;
+                await syncCartToWCSession();
             }
-        } catch (error) {
-            console.error('AICommerce: Error parsing SSE event', error);
+        }, 5000);
+    }
+
+    function stopPolling() {
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
         }
     }
 
-    /**
-     * Update cart UI
-     */
-    function updateCartUI(eventData) {
-        if (!eventData) {
-            return;
-        }
-
-        const cartCount = eventData.cart_count;
-        if (cartCount !== undefined) {
-            const cartCountSelectors = [
-                '.cart-contents-count',
-                '.wc-cart-count',
-                '[data-cart-count]',
-                '.shopping-cart .count',
-            ];
-
-            cartCountSelectors.forEach(selector => {
-                const elements = document.querySelectorAll(selector);
-                elements.forEach(el => {
-                    el.textContent = cartCount;
-                    el.setAttribute('data-cart-count', cartCount);
-                });
-            });
-
-            if (typeof jQuery !== 'undefined' && jQuery.fn.trigger) {
-                jQuery(document.body).trigger('wc_fragment_refresh');
-            }
-        }
-
-        window.dispatchEvent(new CustomEvent('aicommerce_cart_ui_updated', {
-            detail: eventData
-        }));
-    }
-
-    /**
-     * Connect to SSE endpoint
-     */
-    function connectSSE() {
-        const guestToken = getGuestToken();
-        if (!guestToken) {
-            console.warn('AICommerce: Guest token not available for SSE');
-            return;
-        }
-
-        if (sseConnection) {
-            sseConnection.close();
-            sseConnection = null;
-        }
-
-        const sseUrl = API_BASE + '/sse/cart?guest_token=' + encodeURIComponent(guestToken);
-
-        try {
-            sseConnection = new EventSource(sseUrl);
-
-            sseConnection.onopen = function() {
-                console.log('AICommerce: SSE connection opened');
-            };
-
-            sseConnection.onerror = function(error) {
-                console.error('AICommerce: SSE connection error', error);
-                
-                setTimeout(connectSSE, 5000);
-            };
-
-            sseConnection.addEventListener('cart_updated', handleCartEvent);
-            sseConnection.addEventListener('ping', handleCartEvent);
-            sseConnection.addEventListener('connected', handleCartEvent);
-            sseConnection.addEventListener('error', handleCartEvent);
-            sseConnection.addEventListener('timeout', handleCartEvent);
-
-        } catch (error) {
-            console.error('AICommerce: Failed to create SSE connection', error);
-        }
-    }
-
-    /**
-     * Disconnect SSE
-     */
-    function disconnectSSE() {
-        if (sseConnection) {
-            sseConnection.close();
-            sseConnection = null;
-            console.log('AICommerce: SSE connection closed');
-        }
-    }
-
-    /**
-     * Initialize cart sync
-     */
     function init() {
-        const checkIdentifier = setInterval(() => {
-            if (hasCartIdentifier()) {
-                clearInterval(checkIdentifier);
-                
-                syncCartToWCSession().then(() => {
-                    const guestToken = getGuestToken();
-                    if (guestToken) {
-                        connectSSE();
-                    }
-                });
-            }
-        }, 100);
+        // One-time sync on page load
+        if (hasCartIdentifier()) {
+            syncCartToWCSession();
+        }
 
-        setTimeout(() => {
-            clearInterval(checkIdentifier);
-            if (hasCartIdentifier() && !isSyncing) {
-                syncCartToWCSession();
-            }
-        }, 2000);
+        // Start/stop polling with popup lifecycle
+        window.addEventListener('aicommerce:popup_opened', startPolling);
+        window.addEventListener('aicommerce:popup_closed', stopPolling);
 
+        // One-time sync when user returns to tab or window
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                disconnectSSE();
-            } else {
-                if (hasCartIdentifier()) {
-                    const guestToken = getGuestToken();
-                    if (guestToken) {
-                        connectSSE();
-                    }
-                    syncCartToWCSession();
-                }
+            if (!document.hidden && hasCartIdentifier()) {
+                syncCartToWCSession();
             }
         });
 
@@ -262,10 +134,6 @@
             if (hasCartIdentifier()) {
                 syncCartToWCSession();
             }
-        });
-
-        window.addEventListener('beforeunload', () => {
-            disconnectSSE();
         });
     }
 
@@ -276,9 +144,9 @@
     }
 
     window.aicommerceCartSync = {
-        sync: syncCartToWCSession,
-        connect: connectSSE,
-        disconnect: disconnectSSE,
+        sync:         syncCartToWCSession,
+        startPolling: startPolling,
+        stopPolling:  stopPolling,
     };
 
 })();
