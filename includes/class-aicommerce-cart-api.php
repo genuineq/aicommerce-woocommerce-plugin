@@ -63,6 +63,23 @@ class CartAPI {
             )
         );
         
+        // Cart hash endpoint (lightweight, for polling)
+        register_rest_route(
+            $namespace,
+            '/cart/hash',
+            array(
+                'methods'             => 'GET',
+                'callback'            => array( $this, 'get_cart_hash' ),
+                'permission_callback' => '__return_true',
+                'args'                => array(
+                    'guest_token' => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                ),
+            )
+        );
+
         // Remove from cart endpoint
         register_rest_route(
             $namespace,
@@ -1024,5 +1041,33 @@ class CartAPI {
         }
         
         return preg_match( '/^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $guest_token ) === 1;
+    }
+
+    /**
+     * Cart hash endpoint — returns MD5 of cart contents + item count.
+     * Lightweight: no writes, no WC session, used for polling.
+     */
+    public function get_cart_hash( \WP_REST_Request $request ): \WP_REST_Response {
+        $guest_token = sanitize_text_field( $request->get_param( 'guest_token' ) );
+
+        if ( ! empty( $guest_token ) ) {
+            if ( ! $this->validate_guest_token( $guest_token ) ) {
+                return new \WP_REST_Response( array( 'hash' => '', 'count' => 0 ), 200 );
+            }
+            $cart = CartStorage::get_cart( $guest_token );
+        } elseif ( is_user_logged_in() ) {
+            $cart = CartStorage::get_user_cart( get_current_user_id() );
+        } else {
+            return new \WP_REST_Response( array( 'hash' => '', 'count' => 0 ), 200 );
+        }
+
+        if ( empty( $cart ) ) {
+            return new \WP_REST_Response( array( 'hash' => 'empty', 'count' => 0 ), 200 );
+        }
+
+        $hash  = md5( wp_json_encode( $cart ) );
+        $count = array_sum( array_column( $cart, 'quantity' ) );
+
+        return new \WP_REST_Response( array( 'hash' => $hash, 'count' => (int) $count ), 200 );
     }
 }
