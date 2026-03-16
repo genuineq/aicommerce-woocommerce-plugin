@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AICommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.4.2
+ * Version: 1.4.4
  * Author: Genuineq
  * Author URI: https://genuineq.com
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.4.2' );
+define( 'AICOMMERCE_VERSION', '1.4.4' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
@@ -219,10 +219,10 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-api-validator.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-full-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-user-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-sse.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-sync.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
@@ -231,10 +231,10 @@ class AICommerce {
         // Initialize APIs
         new \AICommerce\AuthAPI();
         new \AICommerce\ProductAPI();
+        new \AICommerce\ProductFullAPI();
         new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
-        new \AICommerce\SSE();
-        
+
         // Initialize frontend features
         new \AICommerce\Iframe();
         new \AICommerce\GuestToken();

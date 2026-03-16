@@ -224,44 +224,16 @@ class CartSync {
             }
         }
         
-        // Collect WC cart keys for items that are NOT in user_meta.
-        // user_meta is the source of truth for API-managed carts: instead of copying
-        // those items back into user_meta (which would undo API removals), we remove
-        // them from the WC session so the browser reflects the API state.
-        $wc_keys_not_in_user_meta = array();
-        foreach ( $wc_cart->get_cart() as $cart_item_key => $cart_item ) {
-            $product_id     = isset( $cart_item['product_id'] )   ? absint( $cart_item['product_id'] )   : 0;
-            $variation_id   = isset( $cart_item['variation_id'] ) ? absint( $cart_item['variation_id'] ) : 0;
-            $variation_data = isset( $cart_item['variation'] )     ? $cart_item['variation']              : array();
-
-            $found = false;
-            foreach ( $user_cart as $item ) {
-                if ( $item['product_id'] == $product_id &&
-                     ( isset( $item['variation_data']['variation_id'] ) ? absint( $item['variation_data']['variation_id'] ) : 0 ) == $variation_id &&
-                     ( empty( $variation_data ) || $item['variation_data'] == $variation_data ) ) {
-                    $found = true;
-                    break;
-                }
-            }
-
-            if ( ! $found ) {
-                $wc_keys_not_in_user_meta[] = $cart_item_key;
-            }
-        }
-
         if ( $needs_sync_to_wc ) {
+            // perform_cart_sync adds missing user_meta items to WC and then calls
+            // update_user_cart_from_wc() so user_meta reflects the full WC cart.
             $this->perform_cart_sync( $user_id, $user_cart, $wc_cart );
             $synced = true;
-        }
-
-        if ( ! empty( $wc_keys_not_in_user_meta ) ) {
-            foreach ( $wc_keys_not_in_user_meta as $key ) {
-                $wc_cart->remove_cart_item( $key );
-            }
-            $wc_cart->calculate_totals();
-            if ( WC()->session ) {
-                WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
-            }
+        } else {
+            // WC cart already has all user_meta items. Update user_meta to capture
+            // any items added via WC frontend (classic or blocks) that aren't in
+            // user_meta yet, so they are never removed on subsequent page loads.
+            $this->update_user_cart_from_wc( $user_id, $wc_cart );
             $synced = true;
         }
     }
@@ -274,6 +246,8 @@ class CartSync {
      * @param WC_Cart $wc_cart WooCommerce cart instance
      */
     private function perform_cart_sync( int $user_id, array &$user_cart, \WC_Cart $wc_cart ): void {
+        $changed = false;
+
         foreach ( $user_cart as $idx => $item ) {
             $product_id = isset( $item['product_id'] ) ? absint( $item['product_id'] ) : 0;
             $quantity = isset( $item['quantity'] ) ? absint( $item['quantity'] ) : 1;
@@ -317,25 +291,30 @@ class CartSync {
                     }
                     $new_cart_item_key = false;
                 }
-                
-                if ( $new_cart_item_key && $new_cart_item_key != $item['key'] ) {
-                    $user_cart[ $idx ]['key'] = $new_cart_item_key;
+
+                if ( $new_cart_item_key ) {
+                    $changed = true;
+                    if ( $new_cart_item_key != $item['key'] ) {
+                        $user_cart[ $idx ]['key'] = $new_cart_item_key;
+                    }
                 }
             } else {
                 if ( $cart_item_key != $item['key'] ) {
                     $user_cart[ $idx ]['key'] = $cart_item_key;
                 }
-                
+
                 if ( $existing_quantity < $quantity ) {
                     $wc_cart->set_quantity( $cart_item_key, $quantity );
+                    $changed = true;
                 }
             }
         }
-        
-        $wc_cart->calculate_totals();
-        
-        if ( WC()->session ) {
-            WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
+
+        if ( $changed ) {
+            $wc_cart->calculate_totals();
+            if ( WC()->session ) {
+                WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
+            }
         }
         
         CartStorage::save_user_cart( $user_id, $user_cart );
@@ -397,10 +376,9 @@ class CartSync {
             return;
         }
         
-        if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
-            return;
-        }
-        
+        // Skip only aicommerce REST API calls (they manage user_meta directly).
+        // Do NOT skip WC Store API (Gutenberg blocks) — those use REST_REQUEST too
+        // but need user_meta updated so sync_user_cart_on_page_load doesn't remove them.
         if ( doing_action( 'woocommerce_add_to_cart' ) && isset( $_SERVER['REQUEST_URI'] ) && strpos( $_SERVER['REQUEST_URI'], '/wp-json/aicommerce/v1/' ) !== false ) {
             return;
         }
