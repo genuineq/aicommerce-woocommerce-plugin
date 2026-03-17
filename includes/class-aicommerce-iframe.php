@@ -43,21 +43,19 @@ class Iframe {
         $api_key = Settings::get_api_key();
         
         $guest_token = GuestToken::get_token();
-        
-        $customer_id = GuestToken::get_customer_id();
-        
+
         $params = array();
-        
+
         if ( ! empty( $api_key ) ) {
             $params['s'] = $api_key;
         }
-        
-        if ( ! empty( $guest_token ) ) {
+
+        if ( is_user_logged_in() ) {
+            // Authenticated user: pass customer ID, no guest token needed
+            $params['c'] = (string) get_current_user_id();
+        } elseif ( ! empty( $guest_token ) ) {
+            // Guest: pass guest token only
             $params['g'] = $guest_token;
-        }
-        
-        if ( ! empty( $customer_id ) ) {
-            $params['c'] = $customer_id;
         }
         
         if ( empty( $params ) ) {

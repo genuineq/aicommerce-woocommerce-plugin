@@ -1,11 +1,10 @@
 <?php
 /**
  * Plugin Name: AICommerce
- * Plugin URI: https://example.com/aicommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.4.0
- * Author: Your Name
- * Author URI: https://example.com
+ * Version: 1.4.4
+ * Author: Genuineq
+ * Author URI: https://genuineq.com
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: aicommerce
@@ -22,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.4.0' );
+define( 'AICOMMERCE_VERSION', '1.4.4' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
@@ -220,27 +219,29 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-api-validator.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-full-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-user-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-swagger-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-sse.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-sync.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
-        
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-updater.php';
+
         // Initialize APIs
         new \AICommerce\AuthAPI();
         new \AICommerce\ProductAPI();
+        new \AICommerce\ProductFullAPI();
         new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
-        new \AICommerce\SwaggerAPI();
-        new \AICommerce\SSE();
-        
+
         // Initialize frontend features
         new \AICommerce\Iframe();
         new \AICommerce\GuestToken();
         new \AICommerce\CartSync();
+
+        // Auto-updater
+        new \AICommerce\Updater();
     }
     
     /**

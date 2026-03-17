@@ -73,6 +73,7 @@
         if (modal) {
             modal.style.display = 'flex';
             document.body.style.overflow = 'hidden';
+            window.dispatchEvent(new CustomEvent('aicommerce:popup_opened'));
             
             if (iframe) {
                 const url = settings.url || generateIframeUrl();
@@ -109,7 +110,8 @@
         if (modal) {
             modal.style.display = 'none';
             document.body.style.overflow = '';
-            
+            window.dispatchEvent(new CustomEvent('aicommerce:popup_closed'));
+
             if (button) {
                 button.focus();
             }
