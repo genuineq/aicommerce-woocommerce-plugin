@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Handles frontend floating button and iframe modal
  */
 class Iframe {
-    
+
     /**
      * Constructor
      */
@@ -25,23 +25,24 @@ class Iframe {
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
         add_action( 'wp_footer', array( $this, 'render_button' ) );
     }
-    
+
     /**
      * Check if iframe is enabled
      */
     private function is_enabled(): bool {
         return (bool) get_option( 'aicommerce_iframe_enabled', false );
     }
-    
+
     /**
      * Get iframe URL
      * Auto-generates URL with API key, guest token, and customer ID
      */
     private function get_iframe_url(): string {
-        $base_url = 'https://client.ai.genuineq.com';
-        
         $api_key = Settings::get_api_key();
-        
+
+        /** Set iframe base url for staging / production. */
+        $base_url = ( ! empty( $api_key ) && (0 === strpos( $api_key, 'staging#' )) ) ? 'https://client.ai.staging.genuineq.com' : 'https://client.ai.genuineq.com';
+
         $guest_token = GuestToken::get_token();
 
         $params = array();
@@ -57,28 +58,28 @@ class Iframe {
             // Guest: pass guest token only
             $params['g'] = $guest_token;
         }
-        
+
         if ( empty( $params ) ) {
             return '';
         }
-        
+
         return $base_url . '?' . http_build_query( $params );
     }
-    
+
     /**
      * Get button position
      */
     private function get_button_position(): string {
         return get_option( 'aicommerce_iframe_position', 'bottom-right' );
     }
-    
+
     /**
      * Get button color
      */
     private function get_button_color(): string {
         return get_option( 'aicommerce_iframe_button_color', '#0073aa' );
     }
-    
+
     /**
      * Enqueue frontend scripts and styles
      */
@@ -86,14 +87,14 @@ class Iframe {
         if ( ! $this->is_enabled() ) {
             return;
         }
-        
+
         wp_enqueue_style(
             'aicommerce-iframe',
             AICOMMERCE_PLUGIN_URL . 'assets/css/iframe.css',
             array(),
             AICOMMERCE_VERSION
         );
-        
+
         wp_enqueue_script(
             'aicommerce-iframe',
             AICOMMERCE_PLUGIN_URL . 'assets/js/iframe.js',
@@ -101,7 +102,7 @@ class Iframe {
             AICOMMERCE_VERSION,
             true
         );
-        
+
         wp_localize_script(
             'aicommerce-iframe',
             'aicommerceIframe',
@@ -113,7 +114,7 @@ class Iframe {
             )
         );
     }
-    
+
     /**
      * Render floating button and modal
      */
@@ -121,16 +122,16 @@ class Iframe {
         if ( ! $this->is_enabled() ) {
             return;
         }
-        
+
         $position = $this->get_button_position();
         $color = $this->get_button_color();
         $url = $this->get_iframe_url();
-        
+
         $url = ! empty( $url ) ? esc_url( $url ) : '';
         ?>
         <div id="aicommerce-iframe-wrapper" class="aicommerce-iframe-wrapper aicommerce-iframe-position-<?php echo esc_attr( $position ); ?>">
-            <button 
-                id="aicommerce-iframe-button" 
+            <button
+                id="aicommerce-iframe-button"
                 class="aicommerce-iframe-button"
                 style="background-color: <?php echo esc_attr( $color ); ?>;"
                 aria-label="<?php esc_attr_e( 'Open AI Assistant', 'aicommerce' ); ?>"
@@ -143,20 +144,20 @@ class Iframe {
                 </span>
             </button>
         </div>
-        
+
         <div id="aicommerce-iframe-modal" class="aicommerce-iframe-modal" style="display: none;">
             <div class="aicommerce-iframe-modal-overlay"></div>
             <div class="aicommerce-iframe-modal-content">
-                <button 
-                    id="aicommerce-iframe-close" 
+                <button
+                    id="aicommerce-iframe-close"
                     class="aicommerce-iframe-close"
                     aria-label="<?php esc_attr_e( 'Close', 'aicommerce' ); ?>"
                 >
                     ×
                 </button>
                 <?php if ( ! empty( $url ) ) : ?>
-                    <iframe 
-                        id="aicommerce-iframe" 
+                    <iframe
+                        id="aicommerce-iframe"
                         src="<?php echo esc_url( $url ); ?>"
                         frameborder="0"
                         allowfullscreen
