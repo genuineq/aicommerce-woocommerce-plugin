@@ -39,7 +39,7 @@
         const apiKey = settings.api_key || '';
 
         /** Set iframe base url for staging / production. */
-        const baseUrl = apiKey.startsWith('staging#') ? 'https://client.ai.staging.genuineq.com' : 'https://client.ai.genuineq.com';
+        const baseUrl = apiKey.startsWith('staging_') ? 'https://client.ai.staging.genuineq.com' : 'https://client.ai.genuineq.com';
 
         const guestToken = typeof getAicommerceGuestToken === 'function'
             ? getAicommerceGuestToken()

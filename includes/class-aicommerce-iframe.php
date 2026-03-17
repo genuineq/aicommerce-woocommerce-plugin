@@ -41,7 +41,7 @@ class Iframe {
         $api_key = Settings::get_api_key();
 
         /** Set iframe base url for staging / production. */
-        $base_url = ( ! empty( $api_key ) && (0 === strpos( $api_key, 'staging#' )) ) ? 'https://client.ai.staging.genuineq.com' : 'https://client.ai.genuineq.com';
+        $base_url = ( ! empty( $api_key ) && (0 === strpos( $api_key, 'staging_' )) ) ? 'https://client.ai.staging.genuineq.com' : 'https://client.ai.genuineq.com';
 
         $guest_token = GuestToken::get_token();
 
