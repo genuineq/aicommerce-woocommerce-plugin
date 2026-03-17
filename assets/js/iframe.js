@@ -6,7 +6,7 @@
     'use strict';
 
     const settings = typeof aicommerceIframe !== 'undefined' ? aicommerceIframe : {};
-    
+
     // Elements
     const button = document.getElementById('aicommerce-iframe-button');
     const modal = document.getElementById('aicommerce-iframe-modal');
@@ -34,35 +34,37 @@
      * Generate iframe URL dynamically
      */
     function generateIframeUrl() {
-        const baseUrl = 'https://client.ai.genuineq.com';
         const params = [];
-        
+
         const apiKey = settings.api_key || '';
-        
-        const guestToken = typeof getAicommerceGuestToken === 'function' 
-            ? getAicommerceGuestToken() 
+
+        /** Set iframe base url for staging / production. */
+        const baseUrl = apiKey.startsWith('staging#') ? 'https://client.ai.staging.genuineq.com' : 'https://client.ai.genuineq.com';
+
+        const guestToken = typeof getAicommerceGuestToken === 'function'
+            ? getAicommerceGuestToken()
             : '';
-        
-        const customerId = typeof getAicommerceCustomerId === 'function' 
-            ? getAicommerceCustomerId() 
+
+        const customerId = typeof getAicommerceCustomerId === 'function'
+            ? getAicommerceCustomerId()
             : '';
-        
+
         if (apiKey) {
             params.push('s=' + encodeURIComponent(apiKey));
         }
-        
+
         if (guestToken) {
             params.push('g=' + encodeURIComponent(guestToken));
         }
-        
+
         if (customerId) {
             params.push('c=' + encodeURIComponent(customerId));
         }
-        
+
         if (params.length === 0) {
             return '';
         }
-        
+
         return baseUrl + '?' + params.join('&');
     }
 
@@ -74,15 +76,15 @@
             modal.style.display = 'flex';
             document.body.style.overflow = 'hidden';
             window.dispatchEvent(new CustomEvent('aicommerce:popup_opened'));
-            
+
             if (iframe) {
                 const url = settings.url || generateIframeUrl();
-                
+
                 if (url) {
                     if (iframe.src !== url) {
                         iframe.src = url;
                     }
-                    
+
                     iframe.style.display = 'block';
                     const placeholder = modal.querySelector('.aicommerce-iframe-placeholder');
                     if (placeholder) {
@@ -95,7 +97,7 @@
                         placeholder.style.display = 'block';
                     }
                 }
-                
+
                 setTimeout(() => {
                     iframe.focus();
                 }, 100);
