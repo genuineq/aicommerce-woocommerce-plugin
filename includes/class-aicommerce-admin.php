@@ -116,6 +116,16 @@ class Admin {
                 'default'           => '#0073aa',
             )
         );
+
+        register_setting(
+            'aicommerce_iframe_settings',
+            'aicommerce_iframe_button_label',
+            array(
+                'type'              => 'string',
+                'sanitize_callback' => 'sanitize_text_field',
+                'default'           => '',
+            )
+        );
     }
     
     /**
@@ -181,10 +191,12 @@ class Admin {
             $iframe_enabled = isset( $_POST['aicommerce_iframe_enabled'] ) ? 1 : 0;
             $iframe_position = sanitize_text_field( $_POST['aicommerce_iframe_position'] ?? 'bottom-right' );
             $iframe_button_color = sanitize_hex_color( $_POST['aicommerce_iframe_button_color'] ?? '#0073aa' );
-            
+            $iframe_button_label = sanitize_text_field( $_POST['aicommerce_iframe_button_label'] ?? '' );
+
             update_option( 'aicommerce_iframe_enabled', $iframe_enabled );
             update_option( 'aicommerce_iframe_position', $iframe_position );
             update_option( 'aicommerce_iframe_button_color', $iframe_button_color );
+            update_option( 'aicommerce_iframe_button_label', $iframe_button_label );
             
             echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Iframe settings saved successfully.', 'aicommerce' ) . '</p></div>';
         }
@@ -301,6 +313,7 @@ class Admin {
         $iframe_enabled = get_option( 'aicommerce_iframe_enabled', false );
         $iframe_position = get_option( 'aicommerce_iframe_position', 'bottom-right' );
         $iframe_button_color = get_option( 'aicommerce_iframe_button_color', '#0073aa' );
+        $iframe_button_label = get_option( 'aicommerce_iframe_button_label', '' );
         
         $positions = array(
             'top-left'      => __( 'Top Left', 'aicommerce' ),
@@ -376,6 +389,23 @@ class Admin {
                         </div>
                     </div>
                     
+                    <div class="aicommerce-form-field">
+                        <label for="aicommerce_iframe_button_label" class="aicommerce-label">
+                            <?php esc_html_e( 'Button Label', 'aicommerce' ); ?>
+                        </label>
+                        <div class="aicommerce-input-wrapper">
+                            <input
+                                type="text"
+                                name="aicommerce_iframe_button_label"
+                                id="aicommerce_iframe_button_label"
+                                value="<?php echo esc_attr( $iframe_button_label ); ?>"
+                                class="aicommerce-input"
+                                placeholder="<?php esc_attr_e( 'e.g. Ask AI', 'aicommerce' ); ?>"
+                            />
+                            <p class="description"><?php esc_html_e( 'Optional text displayed to the right of the button. Leave empty to show the button only.', 'aicommerce' ); ?></p>
+                        </div>
+                    </div>
+
                     <div class="aicommerce-form-field">
                         <label for="aicommerce_iframe_button_color" class="aicommerce-label">
                             <?php esc_html_e( 'Button Background Color', 'aicommerce' ); ?>

@@ -81,6 +81,13 @@ class Iframe {
     }
 
     /**
+     * Get button label
+     */
+    private function get_button_label(): string {
+        return get_option( 'aicommerce_iframe_button_label', '' );
+    }
+
+    /**
      * Enqueue frontend scripts and styles
      */
     public function enqueue_scripts(): void {
@@ -109,6 +116,7 @@ class Iframe {
             array(
                 'position' => $this->get_button_position(),
                 'color'    => $this->get_button_color(),
+                'label'    => $this->get_button_label(),
                 'url'      => $this->get_iframe_url(),
                 'api_key'  => Settings::get_api_key(),
             )
@@ -125,6 +133,7 @@ class Iframe {
 
         $position = $this->get_button_position();
         $color = $this->get_button_color();
+        $label = $this->get_button_label();
         $url = $this->get_iframe_url();
 
         $url = ! empty( $url ) ? esc_url( $url ) : '';
@@ -143,6 +152,16 @@ class Iframe {
                     </svg>
                 </span>
             </button>
+            <?php if ( ! empty( $label ) ) : ?>
+                <span
+                    id="aicommerce-iframe-label"
+                    class="aicommerce-iframe-label"
+                    style="background-color: <?php echo esc_attr( $color ); ?>;"
+                    role="button"
+                    tabindex="0"
+                    aria-label="<?php esc_attr_e( 'Open AI Assistant', 'aicommerce' ); ?>"
+                ><?php echo esc_html( $label ); ?></span>
+            <?php endif; ?>
         </div>
 
         <div id="aicommerce-iframe-modal" class="aicommerce-iframe-modal" style="display: none;">

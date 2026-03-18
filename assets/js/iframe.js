@@ -9,6 +9,7 @@
 
     // Elements
     const button = document.getElementById('aicommerce-iframe-button');
+    const label = document.getElementById('aicommerce-iframe-label');
     const modal = document.getElementById('aicommerce-iframe-modal');
     const closeButton = document.getElementById('aicommerce-iframe-close');
     const overlay = modal ? modal.querySelector('.aicommerce-iframe-modal-overlay') : null;
@@ -28,6 +29,10 @@
 
     if (settings.color && button) {
         button.style.backgroundColor = settings.color;
+    }
+
+    if (settings.color && label) {
+        label.style.backgroundColor = settings.color;
     }
 
     /**
@@ -131,6 +136,16 @@
 
     if (button) {
         button.addEventListener('click', openModal);
+    }
+
+    if (label) {
+        label.addEventListener('click', openModal);
+        label.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openModal();
+            }
+        });
     }
 
     if (closeButton) {

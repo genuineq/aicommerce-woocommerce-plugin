@@ -6,6 +6,9 @@
     position: fixed;
     z-index: 999999;
     pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .aicommerce-iframe-button {
@@ -61,6 +64,33 @@
     transform: scale(1.05) rotate(5deg);
 }
 
+.aicommerce-iframe-label {
+    pointer-events: all;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 16px;
+    height: 40px;
+    border-radius: 20px;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: all 0.3s ease;
+    user-select: none;
+    outline: none;
+}
+
+.aicommerce-iframe-label:hover {
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    opacity: 0.9;
+}
+
+.aicommerce-iframe-label:active {
+    transform: scale(0.97);
+}
+
 .aicommerce-iframe-position-top-left {
     top: 20px;
     left: 20px;
@@ -69,14 +99,11 @@
 .aicommerce-iframe-position-top-center {
     top: 20px;
     left: 50%;
-}
-
-.aicommerce-iframe-position-top-center .aicommerce-iframe-button {
     transform: translateX(-50%);
 }
 
 .aicommerce-iframe-position-top-center .aicommerce-iframe-button:hover {
-    transform: translateX(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-top-right {
@@ -87,27 +114,21 @@
 .aicommerce-iframe-position-middle-left {
     top: 50%;
     left: 20px;
-}
-
-.aicommerce-iframe-position-middle-left .aicommerce-iframe-button {
     transform: translateY(-50%);
 }
 
 .aicommerce-iframe-position-middle-left .aicommerce-iframe-button:hover {
-    transform: translateY(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-middle-right {
     top: 50%;
     right: 20px;
-}
-
-.aicommerce-iframe-position-middle-right .aicommerce-iframe-button {
     transform: translateY(-50%);
 }
 
 .aicommerce-iframe-position-middle-right .aicommerce-iframe-button:hover {
-    transform: translateY(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-bottom-left {
@@ -118,14 +139,11 @@
 .aicommerce-iframe-position-bottom-center {
     bottom: 20px;
     left: 50%;
-}
-
-.aicommerce-iframe-position-bottom-center .aicommerce-iframe-button {
     transform: translateX(-50%);
 }
 
 .aicommerce-iframe-position-bottom-center .aicommerce-iframe-button:hover {
-    transform: translateX(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-bottom-right {
