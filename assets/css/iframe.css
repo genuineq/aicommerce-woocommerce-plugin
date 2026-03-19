@@ -6,9 +6,6 @@
     position: fixed;
     z-index: 999999;
     pointer-events: none;
-    display: flex;
-    align-items: center;
-    gap: 10px;
 }
 
 .aicommerce-iframe-button {
@@ -29,6 +26,13 @@
     padding: 0;
 }
 
+.aicommerce-iframe-button--with-label {
+    width: auto;
+    border-radius: 30px;
+    padding: 0 20px 0 16px;
+    gap: 10px;
+}
+
 .aicommerce-iframe-button:hover {
     transform: scale(1.1);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
@@ -43,8 +47,9 @@
     align-items: center;
     justify-content: center;
     user-select: none;
-    width: 100%;
-    height: 100%;
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
 }
 
 .aicommerce-iframe-icon svg {
@@ -65,30 +70,12 @@
 }
 
 .aicommerce-iframe-label {
-    pointer-events: all;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    padding: 0 16px;
-    height: 40px;
-    border-radius: 20px;
     color: #ffffff;
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 400;
     white-space: nowrap;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    transition: all 0.3s ease;
     user-select: none;
-    outline: none;
-}
-
-.aicommerce-iframe-label:hover {
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
-    opacity: 0.9;
-}
-
-.aicommerce-iframe-label:active {
-    transform: scale(0.97);
+    line-height: 1;
 }
 
 .aicommerce-iframe-position-top-left {

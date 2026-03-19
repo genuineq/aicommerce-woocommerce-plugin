@@ -141,7 +141,7 @@ class Iframe {
         <div id="aicommerce-iframe-wrapper" class="aicommerce-iframe-wrapper aicommerce-iframe-position-<?php echo esc_attr( $position ); ?>">
             <button
                 id="aicommerce-iframe-button"
-                class="aicommerce-iframe-button"
+                class="aicommerce-iframe-button <?php echo ! empty( $label ) ? 'aicommerce-iframe-button--with-label' : ''; ?>"
                 style="background-color: <?php echo esc_attr( $color ); ?>;"
                 aria-label="<?php esc_attr_e( 'Open AI Assistant', 'aicommerce' ); ?>"
             >
@@ -151,17 +151,10 @@ class Iframe {
                         </path>
                     </svg>
                 </span>
+                <?php if ( ! empty( $label ) ) : ?>
+                    <span class="aicommerce-iframe-label"><?php echo esc_html( $label ); ?></span>
+                <?php endif; ?>
             </button>
-            <?php if ( ! empty( $label ) ) : ?>
-                <span
-                    id="aicommerce-iframe-label"
-                    class="aicommerce-iframe-label"
-                    style="background-color: <?php echo esc_attr( $color ); ?>;"
-                    role="button"
-                    tabindex="0"
-                    aria-label="<?php esc_attr_e( 'Open AI Assistant', 'aicommerce' ); ?>"
-                ><?php echo esc_html( $label ); ?></span>
-            <?php endif; ?>
         </div>
 
         <div id="aicommerce-iframe-modal" class="aicommerce-iframe-modal" style="display: none;">
