@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AICommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.4.8
+ * Version: 1.4.9
  * Author: Genuineq
  * Author URI: https://genuineq.com
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.4.8' );
+define( 'AICOMMERCE_VERSION', '1.4.9' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
@@ -227,6 +227,7 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-updater.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-webhook.php';
 
         // Initialize APIs
         new \AICommerce\AuthAPI();
@@ -242,6 +243,9 @@ class AICommerce {
 
         // Auto-updater
         new \AICommerce\Updater();
+
+        // Product webhook
+        new \AICommerce\ProductWebhook();
     }
 
     /**
