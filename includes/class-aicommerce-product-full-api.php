@@ -191,7 +191,7 @@ class ProductFullAPI {
             'pages'        => $pages,
         );
 
-        set_transient( $cache_key, $data, 5 * MINUTE_IN_SECONDS );
+        set_transient( $cache_key, $data, 30 * MINUTE_IN_SECONDS );
         return new \WP_REST_Response( $data, 200 );
     }
 
@@ -597,6 +597,12 @@ class ProductFullAPI {
      * Invalidate products list cache when any product is saved.
      */
     public function clear_products_cache(): void {
+        static $cleared = false;
+        if ( $cleared ) {
+            return;
+        }
+        $cleared = true;
+
         global $wpdb;
         $wpdb->query(
             "DELETE FROM {$wpdb->options}

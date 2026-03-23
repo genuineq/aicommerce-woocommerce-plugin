@@ -50,6 +50,11 @@ class ProductWebhook {
     const MAX_CONCURRENT = 10;
 
     /**
+     * @var array<string, true>
+     */
+    private static array $scheduled_in_request = [];
+
+    /**
      * Constructor
      */
     public function __construct() {
@@ -159,6 +164,14 @@ class ProductWebhook {
 
         if ( ! Settings::is_configured() ) {
             return;
+        }
+
+        if ( ! in_array( $event, array( 'product.deleted', 'product.restored' ), true ) ) {
+            $request_key = $product_id . '|' . $variation_id;
+            if ( isset( self::$scheduled_in_request[ $request_key ] ) ) {
+                return;
+            }
+            self::$scheduled_in_request[ $request_key ] = true;
         }
 
         if ( ! function_exists( 'as_schedule_single_action' ) ) {
