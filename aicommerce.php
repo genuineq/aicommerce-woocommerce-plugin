@@ -246,6 +246,9 @@ class AICommerce {
 
         // Product webhook
         new \AICommerce\ProductWebhook();
+
+        // Guest cart cleanup
+        \AICommerce\CartStorage::register_cleanup();
     }
 
     /**

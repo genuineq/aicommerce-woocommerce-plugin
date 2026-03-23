@@ -421,7 +421,46 @@ class CartStorage {
         if ( $user_id <= 0 ) {
             return false;
         }
-        
+
         return delete_user_meta( $user_id, 'aicommerce_cart' );
+    }
+
+    /**
+     * Register the recurring cleanup action.
+     * Called once on plugin init. Safe to call multiple times — AS deduplicates.
+     */
+    public static function register_cleanup(): void {
+        add_action( 'aicommerce_cleanup_guest_carts', array( static::class, 'cleanup_expired_carts' ) );
+
+        if ( function_exists( 'as_has_scheduled_action' ) && ! as_has_scheduled_action( 'aicommerce_cleanup_guest_carts', array(), 'aicommerce' ) ) {
+            as_schedule_recurring_action( time() + 30 * DAY_IN_SECONDS, 30 * DAY_IN_SECONDS, 'aicommerce_cleanup_guest_carts', array(), 'aicommerce' );
+        }
+    }
+
+    /**
+     * Delete all expired guest cart rows from wp_options.
+     * Triggered by Action Scheduler every 30 days.
+     */
+    public static function cleanup_expired_carts(): void {
+        global $wpdb;
+
+        $option_names = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+                $wpdb->esc_like( self::OPTION_PREFIX ) . '%'
+            )
+        );
+
+        if ( empty( $option_names ) ) {
+            return;
+        }
+
+        $now = time();
+        foreach ( $option_names as $option_name ) {
+            $cart_data = get_option( $option_name );
+            if ( isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < $now ) {
+                delete_option( $option_name );
+            }
+        }
     }
 }
