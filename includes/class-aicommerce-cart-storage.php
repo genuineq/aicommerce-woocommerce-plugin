@@ -432,9 +432,11 @@ class CartStorage {
     public static function register_cleanup(): void {
         add_action( 'aicommerce_cleanup_guest_carts', array( static::class, 'cleanup_expired_carts' ) );
 
-        if ( function_exists( 'as_has_scheduled_action' ) && ! as_has_scheduled_action( 'aicommerce_cleanup_guest_carts', array(), 'aicommerce' ) ) {
-            as_schedule_recurring_action( time() + 30 * DAY_IN_SECONDS, 30 * DAY_IN_SECONDS, 'aicommerce_cleanup_guest_carts', array(), 'aicommerce' );
-        }
+        add_action( 'init', function () {
+            if ( function_exists( 'as_has_scheduled_action' ) && ! as_has_scheduled_action( 'aicommerce_cleanup_guest_carts', array(), 'aicommerce' ) ) {
+                as_schedule_recurring_action( time() + 30 * DAY_IN_SECONDS, 30 * DAY_IN_SECONDS, 'aicommerce_cleanup_guest_carts', array(), 'aicommerce' );
+            }
+        } );
     }
 
     /**

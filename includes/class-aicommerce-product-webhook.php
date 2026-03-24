@@ -25,12 +25,18 @@ class ProductWebhook {
      * Third-party API endpoint.
      * Replace with the real URL when available.
      */
-    const WEBHOOK_URL = 'https://your-api-endpoint.example.com/webhooks/product';
+    const WEBHOOK_URL = 'https://api.ai.genuineq.com/api/client/products-sync';
+    const WEBHOOK_URL_STAGING = 'https://api.ai.staging.genuineq.com/api/client/products-sync';
 
     /**
      * Action Scheduler hook name.
      */
     const AS_HOOK = 'aicommerce_product_webhook';
+
+    /**
+     * Action Scheduler hook name for import batch webhook.
+     */
+    const AS_IMPORT_HOOK = 'aicommerce_import_webhook';
 
     /**
      * Action Scheduler group name.
@@ -54,6 +60,16 @@ class ProductWebhook {
      */
     private static array $scheduled_in_request = [];
 
+    private static bool  $in_import    = false;
+    private static array $imported_ids = [];
+
+    private static function get_url(): string {
+        $api_key = Settings::get_api_key();
+        return ( ! empty( $api_key ) && str_starts_with( $api_key, 'staging_' ) )
+            ? self::WEBHOOK_URL_STAGING
+            : self::WEBHOOK_URL;
+    }
+
     /**
      * Constructor
      */
@@ -67,9 +83,9 @@ class ProductWebhook {
         add_action( 'before_delete_post', array( $this, 'on_product_deleted' ) );
         add_action( 'untrashed_post',     array( $this, 'on_product_restored' ) );
 
-        // Product import: one webhook after the full import batch completes,
-        // instead of one per product — prevents flooding on 1000+ imports.
-        add_action( 'woocommerce_product_importer_complete', array( $this, 'on_import_completed' ) );
+        // Product import: collect IDs during import, send one batch webhook on completion.
+        add_action( 'woocommerce_product_import_before_process_item', array( $this, 'on_import_started' ) );
+        add_action( self::AS_IMPORT_HOOK,                             array( $this, 'dispatch_import_webhook' ) );
 
         // Stock changes — fires on ANY stock update regardless of source:
         // order placement, cancellation, refund, manual edit, REST API, CLI.
@@ -82,10 +98,18 @@ class ProductWebhook {
 
 
     public function on_product_created( int $product_id, \WC_Product $product ): void {
+        if ( self::$in_import ) {
+            self::$imported_ids[] = $product_id;
+            return;
+        }
         $this->schedule( $product_id, 'product.created' );
     }
 
     public function on_product_updated( int $product_id, \WC_Product $product ): void {
+        if ( self::$in_import ) {
+            self::$imported_ids[] = $product_id;
+            return;
+        }
         $this->schedule( $product_id, 'product.updated' );
     }
 
@@ -110,14 +134,38 @@ class ProductWebhook {
         $this->schedule( $post_id, 'product.restored' );
     }
 
-    /**
-     * Fires once after WooCommerce CSV import batch completes.
-     * Sends a single products.imported event instead of one per product.
-     *
-     * @param array $results { imported, updated, skipped, failed }
-     */
-    public function on_import_completed( array $results ): void {
-        $this->schedule( 0, 'products.imported' );
+    public function on_import_started(): void {
+        if ( ! self::$in_import ) {
+            self::$imported_ids = [];
+            add_action( 'shutdown', array( $this, 'on_import_completed' ) );
+        }
+        self::$in_import = true;
+    }
+
+    public function on_import_completed(): void {
+        $ids = array_values( array_unique( self::$imported_ids ) );
+        self::$in_import    = false;
+        self::$imported_ids = [];
+
+        if ( empty( self::get_url() ) ) {
+            return;
+        }
+
+        if ( ! Settings::has_credentials() ) {
+            return;
+        }
+
+        if ( ! function_exists( 'as_schedule_single_action' ) ) {
+            $this->dispatch_import_webhook( $ids );
+            return;
+        }
+
+        as_schedule_single_action(
+            time() + self::DISPATCH_DELAY,
+            self::AS_IMPORT_HOOK,
+            array( $ids ),
+            self::AS_GROUP
+        );
     }
 
     /**
@@ -158,11 +206,15 @@ class ProductWebhook {
      * @param int    $variation_id Variation ID, 0 if not applicable.
      */
     private function schedule( int $product_id, string $event, int $variation_id = 0 ): void {
-        if ( empty( self::WEBHOOK_URL ) || 'https://your-api-endpoint.example.com/webhooks/product' === self::WEBHOOK_URL ) {
+        if ( self::$in_import ) {
             return;
         }
 
-        if ( ! Settings::is_configured() ) {
+        if ( empty( self::get_url() ) ) {
+            return;
+        }
+
+        if ( ! Settings::has_credentials() ) {
             return;
         }
 
@@ -243,7 +295,7 @@ class ProductWebhook {
         $payload = $this->build_payload( $product_id, $event, $variation_id );
 
         $response = wp_remote_post(
-            self::WEBHOOK_URL,
+            self::get_url(),
             array(
                 'timeout'     => 15,
                 'blocking'    => true,
@@ -277,6 +329,44 @@ class ProductWebhook {
                     $event
                 )
             );
+        }
+    }
+
+    /**
+     * @param array $product_ids
+     * @throws \Exception On HTTP failure, so AS can retry.
+     */
+    public function dispatch_import_webhook( array $product_ids ): void {
+        $payload = array(
+            'event'       => 'products.imported',
+            'product_ids' => $product_ids,
+            'site_url'    => get_site_url(),
+            'timestamp'   => ( new \DateTime( 'now', new \DateTimeZone( 'UTC' ) ) )->format( \DateTime::ATOM ),
+            'api_key'     => Settings::get_api_key(),
+            'api_secret'  => Settings::get_api_secret(),
+        );
+
+        $response = wp_remote_post(
+            self::get_url(),
+            array(
+                'timeout'     => 15,
+                'blocking'    => true,
+                'redirection' => 3,
+                'headers'     => array(
+                    'Content-Type' => 'application/json',
+                    'Accept'       => 'application/json',
+                ),
+                'body'        => wp_json_encode( $payload ),
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            throw new \Exception( '[AICommerce] Import webhook failed: ' . $response->get_error_message() );
+        }
+
+        $code = wp_remote_retrieve_response_code( $response );
+        if ( $code < 200 || $code >= 300 ) {
+            throw new \Exception( sprintf( '[AICommerce] Import webhook returned HTTP %d', $code ) );
         }
     }
 
@@ -315,14 +405,14 @@ class ProductWebhook {
 
         // Deleted product — no WC object available
         if ( 'product.deleted' === $event ) {
-            $payload['product_id']   = $product_id;
+            $payload['product_ids']  = array( $product_id );
             $payload['product_type'] = 'unknown';
             return $payload;
         }
 
         // Variation event: product_type = 'variation', send both IDs
         if ( $variation_id > 0 ) {
-            $payload['product_id']   = $product_id;
+            $payload['product_ids']  = array( $product_id );
             $payload['variation_id'] = $variation_id;
             $payload['product_type'] = 'variation';
             return $payload;
@@ -330,7 +420,7 @@ class ProductWebhook {
 
         // Regular product event: resolve type from WC object
         $product                 = wc_get_product( $product_id );
-        $payload['product_id']   = $product_id;
+        $payload['product_ids']  = array( $product_id );
         $payload['product_type'] = $product ? $product->get_type() : 'unknown';
 
         return $payload;
