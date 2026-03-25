@@ -47,8 +47,20 @@ class Updater {
 
     /**
      * Constructor
+     *
+     * Auto-updates are only enabled when AICOMMERCE_AUTO_UPDATES is defined
+     * and set to true in wp-config.php. This prevents updates from being
+     * pushed to client sites — only the staging/test site should have this
+     * constant defined.
+     *
+     * Add to your staging wp-config.php:
+     *   define( 'AICOMMERCE_AUTO_UPDATES', true );
      */
     public function __construct() {
+        if ( ! defined( 'AICOMMERCE_AUTO_UPDATES' ) || ! AICOMMERCE_AUTO_UPDATES ) {
+            return;
+        }
+
         $this->plugin_file = plugin_basename( AICOMMERCE_PLUGIN_FILE );
         $this->version     = AICOMMERCE_VERSION;
 

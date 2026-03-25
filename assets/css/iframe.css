@@ -26,6 +26,13 @@
     padding: 0;
 }
 
+.aicommerce-iframe-button--with-label {
+    width: auto;
+    border-radius: 30px;
+    padding: 0 20px 0 16px;
+    gap: 10px;
+}
+
 .aicommerce-iframe-button:hover {
     transform: scale(1.1);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
@@ -40,8 +47,9 @@
     align-items: center;
     justify-content: center;
     user-select: none;
-    width: 100%;
-    height: 100%;
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
 }
 
 .aicommerce-iframe-icon svg {
@@ -61,6 +69,15 @@
     transform: scale(1.05) rotate(5deg);
 }
 
+.aicommerce-iframe-label {
+    color: #ffffff;
+    font-size: 18px;
+    font-weight: 400;
+    white-space: nowrap;
+    user-select: none;
+    line-height: 1;
+}
+
 .aicommerce-iframe-position-top-left {
     top: 20px;
     left: 20px;
@@ -69,14 +86,11 @@
 .aicommerce-iframe-position-top-center {
     top: 20px;
     left: 50%;
-}
-
-.aicommerce-iframe-position-top-center .aicommerce-iframe-button {
     transform: translateX(-50%);
 }
 
 .aicommerce-iframe-position-top-center .aicommerce-iframe-button:hover {
-    transform: translateX(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-top-right {
@@ -87,27 +101,21 @@
 .aicommerce-iframe-position-middle-left {
     top: 50%;
     left: 20px;
-}
-
-.aicommerce-iframe-position-middle-left .aicommerce-iframe-button {
     transform: translateY(-50%);
 }
 
 .aicommerce-iframe-position-middle-left .aicommerce-iframe-button:hover {
-    transform: translateY(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-middle-right {
     top: 50%;
     right: 20px;
-}
-
-.aicommerce-iframe-position-middle-right .aicommerce-iframe-button {
     transform: translateY(-50%);
 }
 
 .aicommerce-iframe-position-middle-right .aicommerce-iframe-button:hover {
-    transform: translateY(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-bottom-left {
@@ -118,14 +126,11 @@
 .aicommerce-iframe-position-bottom-center {
     bottom: 20px;
     left: 50%;
-}
-
-.aicommerce-iframe-position-bottom-center .aicommerce-iframe-button {
     transform: translateX(-50%);
 }
 
 .aicommerce-iframe-position-bottom-center .aicommerce-iframe-button:hover {
-    transform: translateX(-50%) scale(1.1);
+    transform: scale(1.1);
 }
 
 .aicommerce-iframe-position-bottom-right {

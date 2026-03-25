@@ -98,7 +98,7 @@ class ProductAPI {
                 'pages'        => 0,
                 'query'        => $search_query,
             );
-            set_transient( $cache_key, $data, 5 * MINUTE_IN_SECONDS );
+            set_transient( $cache_key, $data, 30 * MINUTE_IN_SECONDS );
             return new \WP_REST_Response( $data, 200 );
         }
 
@@ -115,7 +115,7 @@ class ProductAPI {
             'query'        => $search_query,
         );
 
-        set_transient( $cache_key, $data, 5 * MINUTE_IN_SECONDS );
+        set_transient( $cache_key, $data, 30 * MINUTE_IN_SECONDS );
         return new \WP_REST_Response( $data, 200 );
     }
 

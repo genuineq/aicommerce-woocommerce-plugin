@@ -81,6 +81,13 @@ class Iframe {
     }
 
     /**
+     * Get button label
+     */
+    private function get_button_label(): string {
+        return get_option( 'aicommerce_iframe_button_label', '' );
+    }
+
+    /**
      * Enqueue frontend scripts and styles
      */
     public function enqueue_scripts(): void {
@@ -109,6 +116,7 @@ class Iframe {
             array(
                 'position' => $this->get_button_position(),
                 'color'    => $this->get_button_color(),
+                'label'    => $this->get_button_label(),
                 'url'      => $this->get_iframe_url(),
                 'api_key'  => Settings::get_api_key(),
             )
@@ -125,6 +133,7 @@ class Iframe {
 
         $position = $this->get_button_position();
         $color = $this->get_button_color();
+        $label = $this->get_button_label();
         $url = $this->get_iframe_url();
 
         $url = ! empty( $url ) ? esc_url( $url ) : '';
@@ -132,7 +141,7 @@ class Iframe {
         <div id="aicommerce-iframe-wrapper" class="aicommerce-iframe-wrapper aicommerce-iframe-position-<?php echo esc_attr( $position ); ?>">
             <button
                 id="aicommerce-iframe-button"
-                class="aicommerce-iframe-button"
+                class="aicommerce-iframe-button <?php echo ! empty( $label ) ? 'aicommerce-iframe-button--with-label' : ''; ?>"
                 style="background-color: <?php echo esc_attr( $color ); ?>;"
                 aria-label="<?php esc_attr_e( 'Open AI Assistant', 'aicommerce' ); ?>"
             >
@@ -142,6 +151,9 @@ class Iframe {
                         </path>
                     </svg>
                 </span>
+                <?php if ( ! empty( $label ) ) : ?>
+                    <span class="aicommerce-iframe-label"><?php echo esc_html( $label ); ?></span>
+                <?php endif; ?>
             </button>
         </div>
 
