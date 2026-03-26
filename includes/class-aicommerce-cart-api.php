@@ -1056,48 +1056,61 @@ class CartAPI {
      * Lightweight: no writes, no WC session, used for polling.
      */
     public function get_cart_hash( \WP_REST_Request $request ): \WP_REST_Response {
+        // Rate limit hash polling (lightweight individually, expensive at volume).
+        $client_id = RateLimiter::get_client_id();
+        if ( ! RateLimiter::is_allowed( 'cart_hash:' . $client_id, 120, 60 ) ) {
+            // Keep response shape stable.
+            return new \WP_REST_Response( array( 'hash' => '', 'count' => 0, 'version' => 0 ), 200 );
+        }
+
         $guest_token = sanitize_text_field( $request->get_param( 'guest_token' ) );
 
         if ( ! empty( $guest_token ) ) {
             if ( ! $this->validate_guest_token( $guest_token ) ) {
-                return new \WP_REST_Response( array( 'hash' => '', 'count' => 0 ), 200 );
+                return new \WP_REST_Response( array( 'hash' => '', 'count' => 0, 'version' => 0 ), 200 );
             }
             $cache_key = 'aicommerce_cart_hash_guest_' . md5( $guest_token );
         } elseif ( is_user_logged_in() ) {
             $cache_key = 'aicommerce_cart_hash_user_' . (int) get_current_user_id();
         } else {
-            return new \WP_REST_Response( array( 'hash' => '', 'count' => 0 ), 200 );
+            return new \WP_REST_Response( array( 'hash' => '', 'count' => 0, 'version' => 0 ), 200 );
         }
 
         $cached = $cache_key ? get_transient( $cache_key ) : false;
-        if ( is_array( $cached ) && isset( $cached['hash'], $cached['count'] ) ) {
+        if ( is_array( $cached ) && isset( $cached['hash'], $cached['count'], $cached['version'] ) ) {
             return new \WP_REST_Response(
                 array(
                     'hash'  => (string) $cached['hash'],
                     'count' => (int) $cached['count'],
+                    'version' => (int) $cached['version'],
                 ),
                 200
             );
         }
 
         if ( ! empty( $guest_token ) ) {
-            $cart = CartStorage::get_cart( $guest_token );
+            $meta = CartStorage::get_cart_meta( $guest_token );
         } else {
-            $cart = CartStorage::get_user_cart( get_current_user_id() );
+            $meta = CartStorage::get_user_cart_meta( get_current_user_id() );
         }
 
-        if ( empty( $cart ) ) {
-            $payload = array( 'hash' => 'empty', 'count' => 0 );
+        $version = (int) ( $meta['version'] ?? 0 );
+        $count   = (int) ( $meta['count'] ?? 0 );
+
+        if ( $version <= 0 || $count <= 0 ) {
+            $payload = array( 'hash' => 'empty', 'count' => 0, 'version' => 0 );
             if ( $cache_key ) {
                 set_transient( $cache_key, $payload, 3 );
             }
             return new \WP_REST_Response( $payload, 200 );
         }
 
-        $hash  = md5( wp_json_encode( $cart ) );
-        $count = array_sum( array_column( $cart, 'quantity' ) );
-
-        $payload = array( 'hash' => $hash, 'count' => (int) $count );
+        // Keep the legacy `hash` field but make it cheap: derived from version.
+        $payload = array(
+            'hash'    => 'v' . $version,
+            'count'   => $count,
+            'version' => $version,
+        );
         if ( $cache_key ) {
             set_transient( $cache_key, $payload, 3 );
         }
