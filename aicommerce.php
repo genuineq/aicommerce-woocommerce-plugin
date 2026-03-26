@@ -223,6 +223,7 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-user-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-sse.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-sync.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
