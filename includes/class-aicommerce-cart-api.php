@@ -636,7 +636,15 @@ class CartAPI {
             }
         }
         
-        // Validate that either guest_token or user_id is provided
+        /**
+         * For logged-in users, allow omitting user_id from the client.
+         * We can safely resolve the current user from the session.
+         */
+        if ( empty( $guest_token ) && empty( $user_id_int ) && is_user_logged_in() ) {
+            $user_id_int = get_current_user_id();
+        }
+
+        // Validate that either guest_token or user_id is available
         if ( empty( $guest_token ) && empty( $user_id_int ) ) {
             return new \WP_REST_Response(
                 array(
@@ -1054,20 +1062,46 @@ class CartAPI {
             if ( ! $this->validate_guest_token( $guest_token ) ) {
                 return new \WP_REST_Response( array( 'hash' => '', 'count' => 0 ), 200 );
             }
-            $cart = CartStorage::get_cart( $guest_token );
+            $cache_key = 'aicommerce_cart_hash_guest_' . md5( $guest_token );
         } elseif ( is_user_logged_in() ) {
-            $cart = CartStorage::get_user_cart( get_current_user_id() );
+            $cache_key = 'aicommerce_cart_hash_user_' . (int) get_current_user_id();
         } else {
             return new \WP_REST_Response( array( 'hash' => '', 'count' => 0 ), 200 );
         }
 
+        $cached = $cache_key ? get_transient( $cache_key ) : false;
+        if ( is_array( $cached ) && isset( $cached['hash'], $cached['count'] ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'hash'  => (string) $cached['hash'],
+                    'count' => (int) $cached['count'],
+                ),
+                200
+            );
+        }
+
+        if ( ! empty( $guest_token ) ) {
+            $cart = CartStorage::get_cart( $guest_token );
+        } else {
+            $cart = CartStorage::get_user_cart( get_current_user_id() );
+        }
+
         if ( empty( $cart ) ) {
-            return new \WP_REST_Response( array( 'hash' => 'empty', 'count' => 0 ), 200 );
+            $payload = array( 'hash' => 'empty', 'count' => 0 );
+            if ( $cache_key ) {
+                set_transient( $cache_key, $payload, 3 );
+            }
+            return new \WP_REST_Response( $payload, 200 );
         }
 
         $hash  = md5( wp_json_encode( $cart ) );
         $count = array_sum( array_column( $cart, 'quantity' ) );
 
-        return new \WP_REST_Response( array( 'hash' => $hash, 'count' => (int) $count ), 200 );
+        $payload = array( 'hash' => $hash, 'count' => (int) $count );
+        if ( $cache_key ) {
+            set_transient( $cache_key, $payload, 3 );
+        }
+
+        return new \WP_REST_Response( $payload, 200 );
     }
 }

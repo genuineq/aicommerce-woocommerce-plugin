@@ -708,20 +708,11 @@ class CartSync {
             wp_script_add_data( 'aicommerce-cart-sync', 'strategy', 'defer' );
         }
 
-        /** Expose current user ID to frontend when available. */
-        $user_id = is_user_logged_in() ? get_current_user_id() : null;
-
         /** Pass runtime configuration to frontend script. */
         wp_localize_script(
             'aicommerce-cart-sync',
             'aicommerceCartSyncConfig',
             array(
-                /** API key used by frontend integration. */
-                'api_key' => Settings::get_api_key(),
-
-                /** Current logged-in user ID or null for guests. */
-                'user_id' => $user_id,
-
                 /** Only auto-sync on first load for cart and checkout pages. */
                 'auto_sync_on_load' => (bool) ( is_cart() || is_checkout() ),
             )
