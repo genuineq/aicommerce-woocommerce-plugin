@@ -23,6 +23,56 @@ class CartAPI {
     public function __construct() {
         add_action( 'rest_api_init', array( $this, 'register_routes' ) );
     }
+
+    /**
+     * Update WooCommerce persistent cart user_meta from AICommerce user cart.
+     *
+     * This keeps WooCommerce in sync for logged-in users even when the cart
+     * is manipulated through server-to-server API calls (no browser session).
+     *
+     * @param int $user_id User ID
+     */
+    private function sync_wc_persistent_cart_from_user_cart( int $user_id ): void {
+        if ( $user_id <= 0 ) {
+            return;
+        }
+
+        $items = CartStorage::get_user_cart( $user_id );
+
+        $wc_persistent_key = '_woocommerce_persistent_cart_' . get_current_blog_id();
+        $persistent_cart   = get_user_meta( $user_id, $wc_persistent_key, true );
+        if ( ! is_array( $persistent_cart ) ) {
+            $persistent_cart = array();
+        }
+
+        $cart = array();
+        foreach ( $items as $item ) {
+            $product_id     = (int) ( $item['product_id'] ?? 0 );
+            $quantity       = (int) ( $item['quantity'] ?? 0 );
+            $variation_data = isset( $item['variation_data'] ) && is_array( $item['variation_data'] ) ? $item['variation_data'] : array();
+            $variation_id   = isset( $variation_data['variation_id'] ) ? absint( $variation_data['variation_id'] ) : 0;
+
+            if ( $product_id <= 0 || $quantity <= 0 ) {
+                continue;
+            }
+
+            $key = isset( $item['key'] ) && is_string( $item['key'] ) && $item['key'] !== ''
+                ? $item['key']
+                : 'aicom_' . md5( $product_id . ':' . $variation_id . ':' . wp_json_encode( $variation_data ) );
+
+            $variation_attrs = self::get_variation_attributes_for_add_to_cart( $variation_data, $product_id );
+
+            $cart[ $key ] = array(
+                'product_id'   => $product_id,
+                'variation_id' => $variation_id,
+                'variation'    => $variation_attrs,
+                'quantity'     => $quantity,
+            );
+        }
+
+        $persistent_cart['cart'] = $cart;
+        update_user_meta( $user_id, $wc_persistent_key, $persistent_cart );
+    }
     
     /**
      * Register REST API routes
@@ -255,69 +305,27 @@ class CartAPI {
                 'cart_count' => $cart_count,
             ) );
         } elseif ( ! empty( $user_id ) && $user_id > 0 ) {
-            $added_to_wc = false;
-            
-            if ( class_exists( 'WooCommerce' ) && function_exists( 'WC' ) ) {
-                if ( ! did_action( 'woocommerce_load_cart_from_session' ) ) {
-                    if ( function_exists( 'wc_load_cart' ) ) {
-                        wc_load_cart();
-                    }
-                }
-                
-                $wc_cart = WC()->cart;
-                if ( $wc_cart && is_a( $wc_cart, 'WC_Cart' ) ) {
-                    $variation_id = 0;
-                    if ( ! empty( $variation_data_array ) && isset( $variation_data_array['variation_id'] ) ) {
-                        $variation_id = absint( $variation_data_array['variation_id'] );
-                    }
-                    $variation_attrs_for_wc = self::get_variation_attributes_for_add_to_cart( $variation_data_array, $product_id );
-                    try {
-                        $wc_cart_item_key = $wc_cart->add_to_cart( $product_id, $quantity, $variation_id, $variation_attrs_for_wc );
-                    } catch ( \Exception $e ) {
-                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
-                            error_log( '[AICOM] add_to_cart exception: ' . $e->getMessage() );
-                            error_log( '[AICOM] add_to_cart args: product_id=' . $product_id . ' variation_id=' . $variation_id . ' variation_attrs=' . wp_json_encode( $variation_attrs_for_wc ) );
-                        }
-                        return new \WP_REST_Response(
-                            array(
-                                'success' => false,
-                                'code'    => 'add_to_cart_failed',
-                                'message' => $e->getMessage(),
-                            ),
-                            400
-                        );
-                    }
+            /**
+             * Server-to-server context: do not attempt to operate on the WooCommerce
+             * session cart (it is tied to the browser session). Instead, update
+             * AICommerce persistent user cart and keep WooCommerce persistent cart
+             * meta in sync so the browser sees consistent state on next load.
+             */
+            $cart = CartStorage::add_item_to_user_cart( $user_id, $product_id, $quantity, $variation_data_array );
+            $cart_count = CartStorage::get_user_cart_count( $user_id );
 
-                    if ( $wc_cart_item_key ) {
-                        $added_to_wc = true;
-                        $wc_cart->calculate_totals();
-                        
-                        $wc_cart_item = $wc_cart->get_cart_item( $wc_cart_item_key );
-                        if ( $wc_cart_item ) {
-                            $this->save_user_cart_item_with_wc_key( $user_id, $wc_cart_item_key, $wc_cart_item, $quantity );
-                        }
-                        $cart_count = CartStorage::get_user_cart_count( $user_id );
-                    }
-                }
+            if ( $cart === false ) {
+                return new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'add_to_cart_failed',
+                        'message' => __( 'Failed to add item to cart.', 'aicommerce' ),
+                    ),
+                    500
+                );
             }
-            
-            if ( ! $added_to_wc ) {
-                $cart = CartStorage::add_item_to_user_cart( $user_id, $product_id, $quantity, $variation_data_array );
-                $cart_count = CartStorage::get_user_cart_count( $user_id );
-                
-                if ( $cart === false ) {
-                    return new \WP_REST_Response(
-                        array(
-                            'success' => false,
-                            'code'    => 'add_to_cart_failed',
-                            'message' => __( 'Failed to add item to cart.', 'aicommerce' ),
-                        ),
-                        500
-                    );
-                }
-            } else {
-                $cart = CartStorage::get_user_cart( $user_id );
-            }
+
+            $this->sync_wc_persistent_cart_from_user_cart( (int) $user_id );
             
             $identifier = 'user_' . $user_id;
         } else {
@@ -592,19 +600,9 @@ class CartAPI {
             );
         }
 
-        // 2. Remove from WooCommerce persistent cart (user_meta) so the item does not reappear after the browser session expires and WC reloads from this meta.
-        $wc_persistent_key  = '_woocommerce_persistent_cart_' . get_current_blog_id();
-        $persistent_cart    = get_user_meta( $user_id, $wc_persistent_key, true );
-        if ( is_array( $persistent_cart ) && ! empty( $persistent_cart['cart'] ) ) {
-            foreach ( $persistent_cart['cart'] as $key => $cart_item ) {
-                if ( (int) ( $cart_item['product_id'] ?? 0 ) === $product_id &&
-                     (int) ( $cart_item['variation_id'] ?? 0 ) === $variation_id ) {
-                    unset( $persistent_cart['cart'][ $key ] );
-                    break;
-                }
-            }
-            update_user_meta( $user_id, $wc_persistent_key, $persistent_cart );
-        }
+        // 2. Keep WooCommerce persistent cart user_meta in sync with our cart.
+        // This ensures WooCommerce will not resurrect removed items on next load.
+        $this->sync_wc_persistent_cart_from_user_cart( (int) $user_id );
 
         $cart_count = CartStorage::get_user_cart_count( $user_id );
 
