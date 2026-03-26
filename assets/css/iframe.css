@@ -173,6 +173,13 @@
     z-index: 1;
 }
 
+/* Iframe container must have explicit size for iframe height:100% */
+#aicommerce-iframe-container {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
 .aicommerce-iframe-close {
     position: absolute;
     top: 10px;
