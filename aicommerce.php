@@ -229,6 +229,7 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-updater.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-webhook.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-order-webhook.php';
 
         // Initialize APIs
         new \AICommerce\AuthAPI();
@@ -247,6 +248,9 @@ class AICommerce {
 
         // Product webhook
         new \AICommerce\ProductWebhook();
+
+        // Order webhook
+        new \AICommerce\OrderWebhook();
 
         // Guest cart cleanup
         \AICommerce\CartStorage::register_cleanup();
