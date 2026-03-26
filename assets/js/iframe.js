@@ -44,49 +44,21 @@
 
     /**
      * Generate iframe URL dynamically based on:
-     * - API key (required)
      * - Customer ID (preferred)
      * - Guest token (fallback)
      *
      * @returns {string} Fully constructed iframe URL or empty string
      */
     function generateIframeUrl() {
-        /** Query parameters container. */
-        const params = [];
+        // URL should be provided by the server (`settings.url`) or in the DOM (`data-src`).
+        // This function is retained as a safe fallback but avoids exposing API keys.
+        const guestToken = typeof getAicommerceGuestToken === 'function' ? getAicommerceGuestToken() : '';
+        const customerId = typeof getAicommerceCustomerId === 'function' ? getAicommerceCustomerId() : '';
 
-        /** API key used for environment detection and authentication. */
-        const apiKey = settings.api_key || '';
-
-        /** Determine base URL depending on environment. */
-        const baseUrl = apiKey.startsWith('staging_')
-            ? 'https://client.ai.staging.genuineq.com'
-            : 'https://client.ai.genuineq.com';
-
-        /** Retrieve guest token if available. */
-        const guestToken = typeof getAicommerceGuestToken === 'function'
-            ? getAicommerceGuestToken()
-            : '';
-
-        /** Retrieve authenticated customer ID if available. */
-        const customerId = typeof getAicommerceCustomerId === 'function'
-            ? getAicommerceCustomerId()
-            : '';
-
-        /** Append API key parameter. */
-        if (apiKey) params.push('s=' + encodeURIComponent(apiKey));
-
-        /** Prefer customer ID over guest token. */
-        if (customerId) {
-            params.push('c=' + encodeURIComponent(customerId));
-        } else if (guestToken) {
-            params.push('g=' + encodeURIComponent(guestToken));
-        }
-
-        /** Return empty string if no parameters exist. */
-        if (params.length === 0) return '';
-
-        /** Construct final URL. */
-        return baseUrl + '?' + params.join('&');
+        // Without a base URL + signature, we can't safely build the iframe URL here.
+        // Return empty string so the placeholder is shown instead of guessing.
+        if (!guestToken && !customerId) return '';
+        return '';
     }
 
     /**

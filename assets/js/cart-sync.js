@@ -21,9 +21,6 @@
         ? aicommerceCartSyncConfig
         : {};
 
-    /** Configured user ID (optional). */
-    const _configUserId = _cfg.user_id ? _cfg.user_id : null;
-
     /** Whether to auto-sync on page load. */
     const _autoSyncOnLoad = !!_cfg.auto_sync_on_load;
 
@@ -32,14 +29,62 @@
      */
     let hasUserInteracted = false;
 
+    /** Debounce / cooldown for sync calls (ms). */
+    const SYNC_COOLDOWN_MS = 3500;
+    let lastSyncAt = 0;
+
+    /** Polling backoff configuration. */
+    const POLL_FAST_MS = 5000;   // first minute
+    const POLL_SLOW_MS = 12000;  // after first minute
+    const POLL_FAST_WINDOW_MS = 60000;
+
+    /** Stop polling after inactivity inside the popup (ms). */
+    const INACTIVITY_STOP_MS = 120000; // 2 minutes
+    let lastActivityAt = Date.now();
+    let pollingStartedAt = 0;
+    let popupOpen = false;
+
     /** Retrieve guest token if available. */
     function getGuestToken() {
         return typeof getAicommerceGuestToken === 'function' ? getAicommerceGuestToken() : null;
     }
 
+    function isLoggedIn() {
+        // WordPress adds `logged-in` to body class for authenticated users.
+        return !!(document.body && document.body.classList && document.body.classList.contains('logged-in'));
+    }
+
     /** Check if we have any cart identifier. */
     function hasCartIdentifier() {
-        return !!(getGuestToken() || _configUserId);
+        // Guests require a guest token; logged-in users can be resolved server-side.
+        return !!(getGuestToken() || isLoggedIn());
+    }
+
+    function isCheckoutPage() {
+        if (document.body && document.body.classList.contains('woocommerce-checkout')) return true;
+        return !!document.querySelector('form.checkout');
+    }
+
+    function shouldRefreshFragments() {
+        // Trigger fragments refresh only if a mini-cart / fragments UI is present.
+        return !!(
+            document.querySelector('.widget_shopping_cart') ||
+            document.querySelector('.woocommerce-mini-cart') ||
+            document.querySelector('.wc-block-mini-cart') ||
+            document.querySelector('.site-header-cart') ||
+            document.querySelector('.cart-contents')
+        );
+    }
+
+    function canSyncNow() {
+        const now = Date.now();
+        if (now - lastSyncAt < SYNC_COOLDOWN_MS) return false;
+        lastSyncAt = now;
+        return true;
+    }
+
+    function markActivity() {
+        lastActivityAt = Date.now();
     }
 
     /**
@@ -58,10 +103,9 @@
 
         if (guestToken) {
             url += '?guest_token=' + encodeURIComponent(guestToken);
-        } else if (_configUserId) {
-            url += '?user_id=' + encodeURIComponent(_configUserId);
         } else {
-            return null;
+            // Logged-in user hash can be resolved by session; no query params needed.
+            if (!isLoggedIn()) return null;
         }
 
         try {
@@ -81,11 +125,10 @@
      */
     async function syncCartToWCSession() {
         if (isSyncing) return;
+        if (!canSyncNow()) return;
 
         const guestToken = getGuestToken();
-
-        /** Abort if no identifier exists. */
-        if (!guestToken && !_configUserId) return;
+        if (!guestToken && !isLoggedIn()) return;
 
         isSyncing = true;
 
@@ -94,7 +137,6 @@
             const body = {};
 
             if (guestToken) body.guest_token = guestToken;
-            else if (_configUserId) body.user_id = _configUserId;
 
             /** Send sync request. */
             const res  = await fetch(API_BASE + '/cart/sync', {
@@ -111,8 +153,12 @@
 
                 /** Refresh WooCommerce fragments if jQuery is available. */
                 if (typeof jQuery !== 'undefined') {
-                    jQuery(document.body).trigger('wc_fragment_refresh');
-                    jQuery(document.body).trigger('update_checkout');
+                    if (shouldRefreshFragments()) {
+                        jQuery(document.body).trigger('wc_fragment_refresh');
+                    }
+                    if (isCheckoutPage()) {
+                        jQuery(document.body).trigger('update_checkout');
+                    }
                 }
 
                 /** Dispatch global event. */
@@ -126,23 +172,35 @@
     }
 
     /**
-     * Start polling cart hash every 5 seconds.
+     * Start polling cart hash with adaptive backoff.
      *
      * - Captures initial hash
      * - Syncs only when hash changes
      */
     async function startPolling() {
         if (pollTimer) return;
-
+        if (!hasCartIdentifier()) return;
+        pollingStartedAt = Date.now();
         hasUserInteracted = true;
+        markActivity();
 
         /** Capture baseline hash. */
         lastHash = await fetchCartHash();
 
-        pollTimer = setInterval(async () => {
+        const tick = async () => {
+            if (!pollTimer) return;
 
-            /** Skip when tab is hidden. */
-            if (document.hidden) return;
+            /** Stop polling when tab is hidden. */
+            if (document.hidden) {
+                pollTimer = setTimeout(tick, POLL_SLOW_MS);
+                return;
+            }
+
+            /** Stop polling after inactivity while popup is open. */
+            if (popupOpen && Date.now() - lastActivityAt > INACTIVITY_STOP_MS) {
+                stopPolling();
+                return;
+            }
 
             const hash = await fetchCartHash();
 
@@ -152,14 +210,19 @@
                 await syncCartToWCSession();
             }
 
-        }, 5000);
+            const elapsed = Date.now() - pollingStartedAt;
+            const delay = elapsed < POLL_FAST_WINDOW_MS ? POLL_FAST_MS : POLL_SLOW_MS;
+            pollTimer = setTimeout(tick, delay);
+        };
+
+        pollTimer = setTimeout(tick, POLL_FAST_MS);
     }
 
     /** Stop polling mechanism. */
     function stopPolling() {
         if (!pollTimer) return;
 
-        clearInterval(pollTimer);
+        clearTimeout(pollTimer);
         pollTimer = null;
     }
 
@@ -172,6 +235,12 @@
      * - Tab visibility + focus sync
      */
     function init() {
+        // Track activity while popup is open (used to stop polling after inactivity).
+        const modal = document.getElementById('aicommerce-iframe-modal');
+        if (modal) {
+            const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+            activityEvents.forEach((evt) => modal.addEventListener(evt, markActivity, { passive: true }));
+        }
 
         /** Optional initial sync (e.g. cart/checkout pages). */
         if (_autoSyncOnLoad && hasCartIdentifier()) {
@@ -181,17 +250,22 @@
         /** Handle popup open → start polling. */
         window.addEventListener('aicommerce:popup_opened', () => {
             hasUserInteracted = true;
+            popupOpen = true;
+            markActivity();
 
             /** Ensure WC session is synced before polling starts. */
             if (hasCartIdentifier()) {
                 syncCartToWCSession().finally(startPolling);
             } else {
-                startPolling();
+                // No identifier: avoid useless polling / sync calls.
             }
         });
 
         /** Handle popup close → stop polling. */
-        window.addEventListener('aicommerce:popup_closed', stopPolling);
+        window.addEventListener('aicommerce:popup_closed', () => {
+            popupOpen = false;
+            stopPolling();
+        });
 
         /** Sync when returning to visible tab. */
         document.addEventListener('visibilitychange', () => {

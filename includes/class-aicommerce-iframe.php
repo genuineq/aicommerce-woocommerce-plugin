@@ -168,9 +168,6 @@ class Iframe {
 
 				/** Fully generated iframe URL. */
 				'url'      => $this->get_iframe_url(),
-
-				/** API key exposed for frontend integration needs. */
-				'api_key'  => Settings::get_api_key(),
 			)
 		);
 	}

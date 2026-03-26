@@ -290,30 +290,6 @@ class GuestToken {
         if ( function_exists( 'wp_script_add_data' ) ) {
             wp_script_add_data( 'aicommerce-guest-token', 'strategy', 'defer' );
         }
-
-        /** Read guest token from cookie for frontend use. */
-        $token = $this->get_token_from_cookie();
-
-        /** Default frontend customer ID value. */
-        $customer_id = '';
-
-        /** Prefer real logged-in user ID when user is authenticated. */
-        if ( is_user_logged_in() ) {
-            $customer_id = (string) get_current_user_id();
-        } else {
-            /** Fallback to customer ID stored in cookie for guests. */
-            $customer_id = $this->get_customer_id_from_cookie();
-        }
-
-        /** Expose token and customer ID to frontend script. */
-        wp_localize_script(
-            'aicommerce-guest-token',
-            'aicommerceGuestToken',
-            array(
-                'token'       => $token,
-                'customer_id' => $customer_id,
-            )
-        );
     }
 
     /**
