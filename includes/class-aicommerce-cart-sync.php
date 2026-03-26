@@ -98,6 +98,21 @@ class CartSync {
             return;
         }
 
+        /**
+         * Short-circuit heavy merge when nothing changed.
+         * We store the last synced guest cart version in WC session.
+         */
+        if ( function_exists( 'WC' ) && WC() && WC()->session ) {
+            $meta              = CartStorage::get_cart_meta( $guest_token );
+            $stored_version    = (int) ( $meta['version'] ?? 0 );
+            $session_key       = 'aicommerce_guest_cart_version_' . md5( $guest_token );
+            $last_synced       = (int) WC()->session->get( $session_key, 0 );
+
+            if ( $stored_version > 0 && $last_synced === $stored_version ) {
+                return;
+            }
+        }
+
         /** Prevent duplicate sync during the same request. */
         static $synced = false;
         if ( $synced ) {
@@ -203,6 +218,19 @@ class CartSync {
                 WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
             }
         }
+
+        /**
+         * Mark this guest cart version as synced even if nothing was added,
+         * to avoid re-running merge logic on every page load.
+         */
+        if ( WC()->session ) {
+            $meta           = CartStorage::get_cart_meta( $guest_token );
+            $stored_version = (int) ( $meta['version'] ?? 0 );
+            if ( $stored_version > 0 ) {
+                $session_key = 'aicommerce_guest_cart_version_' . md5( $guest_token );
+                WC()->session->set( $session_key, $stored_version );
+            }
+        }
     }
 
     /**
@@ -225,6 +253,19 @@ class CartSync {
         /** Stop if current user ID is invalid. */
         if ( ! $user_id ) {
             return;
+        }
+
+        /**
+         * Short-circuit heavy sync when stored cart hasn't changed.
+         * We store the last synced user cart version in WC session.
+         */
+        if ( function_exists( 'WC' ) && WC() && WC()->session ) {
+            $meta           = CartStorage::get_user_cart_meta( $user_id );
+            $stored_version = (int) ( $meta['version'] ?? 0 );
+            $last_synced    = (int) WC()->session->get( 'aicommerce_user_cart_version', 0 );
+            if ( $stored_version > 0 && $last_synced === $stored_version ) {
+                return;
+            }
         }
 
         /** Prevent duplicate sync during the same request. */
@@ -324,6 +365,15 @@ class CartSync {
              */
             $this->update_user_cart_from_wc( $user_id, $wc_cart );
             $synced = true;
+        }
+
+        /** Mark stored user cart version as synced to avoid re-processing. */
+        if ( function_exists( 'WC' ) && WC() && WC()->session ) {
+            $meta           = CartStorage::get_user_cart_meta( $user_id );
+            $stored_version = (int) ( $meta['version'] ?? 0 );
+            if ( $stored_version > 0 ) {
+                WC()->session->set( 'aicommerce_user_cart_version', $stored_version );
+            }
         }
     }
 

@@ -32,6 +32,98 @@ class CartStorage {
      * Cart expiration time in seconds (30 days)
      */
     private const CART_EXPIRATION = 30 * DAY_IN_SECONDS;
+
+    /**
+     * Normalize guest cart data structure.
+     *
+     * @param mixed $cart_data Raw option value
+     * @return array{items:array,updated_at:int,expires_at:int,version:int,count:int}
+     */
+    private static function normalize_guest_cart_data( $cart_data ): array {
+        $now = time();
+
+        if ( ! is_array( $cart_data ) ) {
+            return array(
+                'items'      => array(),
+                'updated_at' => $now,
+                'expires_at' => $now + self::CART_EXPIRATION,
+                'version'    => 1,
+                'count'      => 0,
+            );
+        }
+
+        $items = isset( $cart_data['items'] ) && is_array( $cart_data['items'] ) ? $cart_data['items'] : array();
+        $count = 0;
+        foreach ( $items as $item ) {
+            $count += isset( $item['quantity'] ) ? (int) $item['quantity'] : 0;
+        }
+
+        $version = isset( $cart_data['version'] ) ? (int) $cart_data['version'] : 1;
+        if ( $version < 1 ) {
+            $version = 1;
+        }
+
+        return array(
+            'items'      => $items,
+            'updated_at' => isset( $cart_data['updated_at'] ) ? (int) $cart_data['updated_at'] : $now,
+            'expires_at' => isset( $cart_data['expires_at'] ) ? (int) $cart_data['expires_at'] : ( $now + self::CART_EXPIRATION ),
+            'version'    => $version,
+            'count'      => $count,
+        );
+    }
+
+    /**
+     * Normalize user cart data structure.
+     *
+     * @param mixed $cart_data Raw user_meta value
+     * @return array{items:array,updated_at:int,version:int,count:int}
+     */
+    private static function normalize_user_cart_data( $cart_data ): array {
+        $now = time();
+
+        if ( ! is_array( $cart_data ) ) {
+            return array(
+                'items'      => array(),
+                'updated_at' => $now,
+                'version'    => 1,
+                'count'      => 0,
+            );
+        }
+
+        $items = isset( $cart_data['items'] ) && is_array( $cart_data['items'] ) ? $cart_data['items'] : array();
+        $count = 0;
+        foreach ( $items as $item ) {
+            $count += isset( $item['quantity'] ) ? (int) $item['quantity'] : 0;
+        }
+
+        $version = isset( $cart_data['version'] ) ? (int) $cart_data['version'] : 1;
+        if ( $version < 1 ) {
+            $version = 1;
+        }
+
+        return array(
+            'items'      => $items,
+            'updated_at' => isset( $cart_data['updated_at'] ) ? (int) $cart_data['updated_at'] : $now,
+            'version'    => $version,
+            'count'      => $count,
+        );
+    }
+
+    /**
+     * Persist guest cart data (items + meta).
+     *
+     * @param string $guest_token Guest token
+     * @param array  $cart_data   Normalized cart data
+     * @return bool
+     */
+    private static function save_guest_cart_data( string $guest_token, array $cart_data ): bool {
+        if ( empty( $guest_token ) ) {
+            return false;
+        }
+
+        $key = self::get_storage_key( $guest_token );
+        return update_option( $key, $cart_data, false );
+    }
     
     /**
      * Get cart storage key for guest token
@@ -66,22 +158,57 @@ class CartStorage {
             return array();
         }
 
+        $cart_data = self::normalize_guest_cart_data( $cart_data );
+
         // Check expiration
         if ( isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < time() ) {
             self::delete_cart( $guest_token );
             return array();
         }
 
-        $items = isset( $cart_data['items'] ) ? $cart_data['items'] : array();
+        $items = $cart_data['items'];
 
         // Deduplicate items that share the same product_id + variation_id
         // (can accumulate if different key formats were stored over time)
         $deduped = self::deduplicate_items( $items );
         if ( count( $deduped ) !== count( $items ) ) {
-            self::save_cart( $guest_token, $deduped );
+            // Save without bumping the version; this is a normalization step.
+            $cart_data['items'] = $deduped;
+            $cart_data          = self::normalize_guest_cart_data( $cart_data );
+            self::save_guest_cart_data( $guest_token, $cart_data );
         }
 
         return $deduped;
+    }
+
+    /**
+     * Get guest cart meta (version + count) without loading products.
+     *
+     * @param string $guest_token Guest token
+     * @return array{version:int,count:int}
+     */
+    public static function get_cart_meta( string $guest_token ): array {
+        if ( empty( $guest_token ) ) {
+            return array( 'version' => 0, 'count' => 0 );
+        }
+
+        $key       = self::get_storage_key( $guest_token );
+        $cart_data = get_option( $key, null );
+        if ( $cart_data === null ) {
+            return array( 'version' => 0, 'count' => 0 );
+        }
+
+        $cart_data = self::normalize_guest_cart_data( $cart_data );
+
+        if ( isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < time() ) {
+            self::delete_cart( $guest_token );
+            return array( 'version' => 0, 'count' => 0 );
+        }
+
+        return array(
+            'version' => (int) $cart_data['version'],
+            'count'   => (int) $cart_data['count'],
+        );
     }
     
     /**
@@ -95,16 +222,18 @@ class CartStorage {
         if ( empty( $guest_token ) ) {
             return false;
         }
-        
-        $key = self::get_storage_key( $guest_token );
-        
-        $cart_data = array(
-            'items'      => $items,
-            'updated_at' => time(),
-            'expires_at' => time() + self::CART_EXPIRATION,
-        );
-        
-        return update_option( $key, $cart_data, false );
+
+        $key       = self::get_storage_key( $guest_token );
+        $existing  = get_option( $key, null );
+        $cart_data = self::normalize_guest_cart_data( $existing );
+
+        $cart_data['items']      = $items;
+        $cart_data['updated_at'] = time();
+        $cart_data['expires_at'] = time() + self::CART_EXPIRATION;
+        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data               = self::normalize_guest_cart_data( $cart_data );
+
+        return self::save_guest_cart_data( $guest_token, $cart_data );
     }
     
     /**
@@ -121,7 +250,17 @@ class CartStorage {
             return false;
         }
 
-        $cart = self::get_cart( $guest_token );
+        $key       = self::get_storage_key( $guest_token );
+        $existing  = get_option( $key, null );
+        $cart_data = self::normalize_guest_cart_data( $existing );
+
+        // Check expiration (avoid resurrecting expired carts)
+        if ( isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < time() ) {
+            self::delete_cart( $guest_token );
+            $cart_data = self::normalize_guest_cart_data( null );
+        }
+
+        $cart = $cart_data['items'];
 
         // Match by product_id + variation_id to avoid duplicates from different key formats
         $existing_index = self::find_item_by_product( $cart, $product_id, $variation_data );
@@ -138,7 +277,13 @@ class CartStorage {
             );
         }
 
-        if ( self::save_cart( $guest_token, $cart ) ) {
+        $cart_data['items']      = $cart;
+        $cart_data['updated_at'] = time();
+        $cart_data['expires_at'] = time() + self::CART_EXPIRATION;
+        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data               = self::normalize_guest_cart_data( $cart_data );
+
+        if ( self::save_guest_cart_data( $guest_token, $cart_data ) ) {
             return $cart;
         }
 
@@ -243,14 +388,8 @@ class CartStorage {
      * @return int Total items count
      */
     public static function get_cart_count( string $guest_token ): int {
-        $cart = self::get_cart( $guest_token );
-        $count = 0;
-        
-        foreach ( $cart as $item ) {
-            $count += isset( $item['quantity'] ) ? (int) $item['quantity'] : 0;
-        }
-        
-        return $count;
+        $meta = self::get_cart_meta( $guest_token );
+        return (int) $meta['count'];
     }
     
     /**
@@ -265,13 +404,29 @@ class CartStorage {
         if ( empty( $guest_token ) || $product_id <= 0 ) {
             return false;
         }
-        $cart  = self::get_cart( $guest_token );
+        $key       = self::get_storage_key( $guest_token );
+        $existing  = get_option( $key, null );
+        $cart_data = self::normalize_guest_cart_data( $existing );
+
+        if ( isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < time() ) {
+            self::delete_cart( $guest_token );
+            return array();
+        }
+
+        $cart  = $cart_data['items'];
         $index = self::find_item_by_product( $cart, $product_id, $variation_data );
         if ( $index === false ) {
             return $cart;
         }
         array_splice( $cart, $index, 1 );
-        if ( self::save_cart( $guest_token, $cart ) ) {
+
+        $cart_data['items']      = $cart;
+        $cart_data['updated_at'] = time();
+        $cart_data['expires_at'] = time() + self::CART_EXPIRATION;
+        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data               = self::normalize_guest_cart_data( $cart_data );
+
+        if ( self::save_guest_cart_data( $guest_token, $cart_data ) ) {
             return $cart;
         }
         return false;
@@ -309,8 +464,32 @@ class CartStorage {
         if ( ! is_array( $cart_data ) || empty( $cart_data ) ) {
             return array();
         }
-        
-        return isset( $cart_data['items'] ) ? $cart_data['items'] : array();
+
+        $cart_data = self::normalize_user_cart_data( $cart_data );
+        return $cart_data['items'];
+    }
+
+    /**
+     * Get user cart meta (version + count).
+     *
+     * @param int $user_id User ID
+     * @return array{version:int,count:int}
+     */
+    public static function get_user_cart_meta( int $user_id ): array {
+        if ( $user_id <= 0 ) {
+            return array( 'version' => 0, 'count' => 0 );
+        }
+
+        $cart_data = get_user_meta( $user_id, 'aicommerce_cart', true );
+        if ( ! is_array( $cart_data ) ) {
+            return array( 'version' => 0, 'count' => 0 );
+        }
+
+        $cart_data = self::normalize_user_cart_data( $cart_data );
+        return array(
+            'version' => (int) $cart_data['version'],
+            'count'   => (int) $cart_data['count'],
+        );
     }
     
     /**
@@ -324,12 +503,15 @@ class CartStorage {
         if ( $user_id <= 0 ) {
             return false;
         }
-        
-        $cart_data = array(
-            'items'      => $items,
-            'updated_at' => time(),
-        );
-        
+
+        $existing  = get_user_meta( $user_id, 'aicommerce_cart', true );
+        $cart_data = self::normalize_user_cart_data( $existing );
+
+        $cart_data['items']      = $items;
+        $cart_data['updated_at'] = time();
+        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data               = self::normalize_user_cart_data( $cart_data );
+
         return update_user_meta( $user_id, 'aicommerce_cart', $cart_data );
     }
     
@@ -347,7 +529,9 @@ class CartStorage {
             return false;
         }
 
-        $cart = self::get_user_cart( $user_id );
+        $existing  = get_user_meta( $user_id, 'aicommerce_cart', true );
+        $cart_data = self::normalize_user_cart_data( $existing );
+        $cart      = $cart_data['items'];
 
         $existing_index = self::find_item_by_product( $cart, $product_id, $variation_data );
 
@@ -363,7 +547,12 @@ class CartStorage {
             );
         }
 
-        if ( self::save_user_cart( $user_id, $cart ) ) {
+        $cart_data['items']      = $cart;
+        $cart_data['updated_at'] = time();
+        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data               = self::normalize_user_cart_data( $cart_data );
+
+        if ( update_user_meta( $user_id, 'aicommerce_cart', $cart_data ) ) {
             return $cart;
         }
 
@@ -382,13 +571,20 @@ class CartStorage {
         if ( $user_id <= 0 || $product_id <= 0 ) {
             return false;
         }
-        $cart  = self::get_user_cart( $user_id );
+        $existing  = get_user_meta( $user_id, 'aicommerce_cart', true );
+        $cart_data = self::normalize_user_cart_data( $existing );
+        $cart      = $cart_data['items'];
         $index = self::find_item_by_product( $cart, $product_id, $variation_data );
         if ( $index === false ) {
             return $cart;
         }
         array_splice( $cart, $index, 1 );
-        if ( self::save_user_cart( $user_id, $cart ) ) {
+        $cart_data['items']      = $cart;
+        $cart_data['updated_at'] = time();
+        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data               = self::normalize_user_cart_data( $cart_data );
+
+        if ( update_user_meta( $user_id, 'aicommerce_cart', $cart_data ) ) {
             return $cart;
         }
         return false;
@@ -401,14 +597,8 @@ class CartStorage {
      * @return int Total items count
      */
     public static function get_user_cart_count( int $user_id ): int {
-        $cart = self::get_user_cart( $user_id );
-        $count = 0;
-        
-        foreach ( $cart as $item ) {
-            $count += isset( $item['quantity'] ) ? (int) $item['quantity'] : 0;
-        }
-        
-        return $count;
+        $meta = self::get_user_cart_meta( $user_id );
+        return (int) $meta['count'];
     }
     
     /**
