@@ -248,6 +248,8 @@ class CartAPI {
                 );
             }
             
+            CartStorage::mark_as_ai_cart( $guest_token );
+
             SSE::send_event( $guest_token, 'cart_updated', array(
                 'action'     => 'item_added',
                 'product_id' => $product_id,
@@ -319,6 +321,8 @@ class CartAPI {
                 $cart = CartStorage::get_user_cart( $user_id );
             }
             
+            CartStorage::mark_as_ai_user_cart( $user_id );
+
             $identifier = 'user_' . $user_id;
         } else {
             return new \WP_REST_Response(
