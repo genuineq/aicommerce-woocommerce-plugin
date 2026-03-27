@@ -11,7 +11,7 @@
 
 namespace AICommerce;
 
-// Exit if accessed directly
+/** Exit if accessed directly. */
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -21,145 +21,187 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class ProductWebhook {
 
-    /**
-     * Third-party API endpoint.
-     * Replace with the real URL when available.
-     */
+    /** Third-party production API endpoint. */
     const WEBHOOK_URL = 'https://api.ai.genuineq.com/api/client/products-sync';
+
+    /** Third-party staging API endpoint. */
     const WEBHOOK_URL_STAGING = 'https://api.ai.staging.genuineq.com/api/client/products-sync';
 
-    /**
-     * Action Scheduler hook name.
-     */
+    /** Action Scheduler hook name for product events. */
     const AS_HOOK = 'aicommerce_product_webhook';
 
-    /**
-     * Action Scheduler hook name for import batch webhook.
-     */
+    /** Action Scheduler hook name for import batch webhook. */
     const AS_IMPORT_HOOK = 'aicommerce_import_webhook';
 
-    /**
-     * Action Scheduler group name.
-     */
+    /** Action Scheduler group name. */
     const AS_GROUP = 'aicommerce';
 
-    /**
-     * Seconds to wait before dispatching after a product save.
-     * Batches rapid consecutive saves (e.g. bulk edit) into one webhook.
-     */
+    /** Delay (seconds) before dispatching webhook to allow batching. */
     const DISPATCH_DELAY = 5;
 
-    /**
-     * Maximum number of webhook HTTP requests allowed to run concurrently.
-     * If this limit is reached, AS retries the action later with back-off.
-     */
+    /** Maximum concurrent webhook executions allowed. */
     const MAX_CONCURRENT = 10;
 
-    /**
-     * @var array<string, true>
-     */
+    /** Tracks scheduled events within the same request to avoid duplicates. */
     private static array $scheduled_in_request = [];
 
-    private static bool  $in_import    = false;
+    /** Indicates whether product import is currently in progress. */
+    private static bool $in_import = false;
+
+    /** Stores product IDs collected during import process. */
     private static array $imported_ids = [];
 
+    /**
+     * Resolve correct webhook URL based on API key.
+     *
+     * @return string
+     */
     private static function get_url(): string {
+        /** Retrieve API key from settings. */
         $api_key = Settings::get_api_key();
+
+        /** Use staging URL if API key starts with "staging_". */
         return ( ! empty( $api_key ) && str_starts_with( $api_key, 'staging_' ) )
             ? self::WEBHOOK_URL_STAGING
             : self::WEBHOOK_URL;
     }
 
     /**
-     * Constructor
+     * Constructor.
+     *
+     * Registers all WooCommerce and WordPress hooks.
+     *
+     * @return void
      */
     public function __construct() {
-        // Product create / update
-        add_action( 'woocommerce_new_product',    array( $this, 'on_product_created' ), 10, 2 );
+        /** Hook product creation event. */
+        add_action( 'woocommerce_new_product', array( $this, 'on_product_created' ), 10, 2 );
+
+        /** Hook product update event. */
         add_action( 'woocommerce_update_product', array( $this, 'on_product_updated' ), 10, 2 );
 
-        // Product trash / delete / restore
-        add_action( 'wp_trash_post',      array( $this, 'on_product_trashed' ) );
+        /** Hook product trash event. */
+        add_action( 'wp_trash_post', array( $this, 'on_product_trashed' ) );
+
+        /** Hook product deletion event. */
         add_action( 'before_delete_post', array( $this, 'on_product_deleted' ) );
-        add_action( 'untrashed_post',     array( $this, 'on_product_restored' ) );
 
-        // Product import: collect IDs during import, send one batch webhook on completion.
+        /** Hook product restore event. */
+        add_action( 'untrashed_post', array( $this, 'on_product_restored' ) );
+
+        /** Hook import start event. */
         add_action( 'woocommerce_product_import_before_process_item', array( $this, 'on_import_started' ) );
-        add_action( self::AS_IMPORT_HOOK,                             array( $this, 'dispatch_import_webhook' ) );
 
-        // Stock changes — fires on ANY stock update regardless of source:
-        // order placement, cancellation, refund, manual edit, REST API, CLI.
-        add_action( 'woocommerce_product_set_stock',   array( $this, 'on_product_stock_changed' ) );
+        /** Hook import webhook dispatcher. */
+        add_action( self::AS_IMPORT_HOOK, array( $this, 'dispatch_import_webhook' ) );
+
+        /** Hook stock changes for simple products. */
+        add_action( 'woocommerce_product_set_stock', array( $this, 'on_product_stock_changed' ) );
+
+        /** Hook stock changes for variations. */
         add_action( 'woocommerce_variation_set_stock', array( $this, 'on_variation_stock_changed' ) );
 
-        // Action Scheduler worker
+        /** Register Action Scheduler worker. */
         add_action( self::AS_HOOK, array( $this, 'dispatch_webhook' ), 10, 3 );
     }
 
-
+    /** Handle product creation event. */
     public function on_product_created( int $product_id, \WC_Product $product ): void {
+        /** Collect IDs during import instead of scheduling immediately. */
         if ( self::$in_import ) {
             self::$imported_ids[] = $product_id;
             return;
         }
+
+        /** Schedule webhook for product creation. */
         $this->schedule( $product_id, 'product.created' );
     }
 
+    /** Handle product update event. */
     public function on_product_updated( int $product_id, \WC_Product $product ): void {
+        /** Collect IDs during import instead of scheduling immediately. */
         if ( self::$in_import ) {
             self::$imported_ids[] = $product_id;
             return;
         }
+
+        /** Schedule webhook for product update. */
         $this->schedule( $product_id, 'product.updated' );
     }
 
+    /** Handle product trash event. */
     public function on_product_trashed( int $post_id ): void {
+        /** Ensure post type is product. */
         if ( 'product' !== get_post_type( $post_id ) ) {
             return;
         }
+
+        /** Schedule deletion webhook. */
         $this->schedule( $post_id, 'product.deleted' );
     }
 
+    /** Handle product permanent deletion. */
     public function on_product_deleted( int $post_id ): void {
+        /** Ensure post type is product. */
         if ( 'product' !== get_post_type( $post_id ) ) {
             return;
         }
+
+        /** Schedule deletion webhook. */
         $this->schedule( $post_id, 'product.deleted' );
     }
 
+    /** Handle product restore from trash. */
     public function on_product_restored( int $post_id ): void {
+        /** Ensure post type is product. */
         if ( 'product' !== get_post_type( $post_id ) ) {
             return;
         }
+
+        /** Schedule restore webhook. */
         $this->schedule( $post_id, 'product.restored' );
     }
 
+    /** Mark import start and initialize collection. */
     public function on_import_started(): void {
+        /** Initialize import tracking only once per request. */
         if ( ! self::$in_import ) {
             self::$imported_ids = [];
+
+            /** Register shutdown hook to finalize import. */
             add_action( 'shutdown', array( $this, 'on_import_completed' ) );
         }
+
+        /** Mark import state as active. */
         self::$in_import = true;
     }
 
+    /** Handle import completion and dispatch batch webhook. */
     public function on_import_completed(): void {
+        /** Deduplicate imported product IDs. */
         $ids = array_values( array_unique( self::$imported_ids ) );
+
+        /** Reset import state. */
         self::$in_import    = false;
         self::$imported_ids = [];
 
+        /** Skip if webhook URL is missing. */
         if ( empty( self::get_url() ) ) {
             return;
         }
 
+        /** Skip if credentials are missing. */
         if ( ! Settings::has_credentials() ) {
             return;
         }
 
+        /** Fallback to direct dispatch if Action Scheduler is unavailable. */
         if ( ! function_exists( 'as_schedule_single_action' ) ) {
             $this->dispatch_import_webhook( $ids );
             return;
         }
 
+        /** Schedule batch import webhook. */
         as_schedule_single_action(
             time() + self::DISPATCH_DELAY,
             self::AS_IMPORT_HOOK,
@@ -169,70 +211,78 @@ class ProductWebhook {
     }
 
     /**
-     * Fires whenever WooCommerce updates stock on a simple / parent product.
+     * Handle stock change for simple or parent products.
      *
      * @param \WC_Product $product
      */
     public function on_product_stock_changed( \WC_Product $product ): void {
+        /** Schedule stock update webhook. */
         $this->schedule( $product->get_id(), 'product.stock_updated' );
     }
 
     /**
-     * Fires whenever WooCommerce updates stock on a product variation.
-     * Sends variation_id + parent product_id so the receiver knows
-     * which specific variation changed.
+     * Handle stock change for variations.
      *
      * @param \WC_Product $variation
      */
     public function on_variation_stock_changed( \WC_Product $variation ): void {
+        /** Retrieve parent product ID. */
         $parent_id = $variation->get_parent_id();
+
+        /** Skip if no parent exists. */
         if ( ! $parent_id ) {
             return;
         }
+
+        /** Schedule stock update webhook with variation ID. */
         $this->schedule( $parent_id, 'product.stock_updated', $variation->get_id() );
     }
 
     /**
-     * Enqueue an async Action Scheduler action.
+     * Schedule webhook execution via Action Scheduler.
      *
-     * Deduplication: if a pending action already exists for this
-     * product_id + event + variation_id combination, skip it.
-     * The existing action will reflect the latest state when it runs.
-     *
-     * Falls back to direct (blocking) dispatch if AS is unavailable.
-     *
-     * @param int    $product_id   Parent product ID (0 for import-level events).
-     * @param string $event        Event name.
-     * @param int    $variation_id Variation ID, 0 if not applicable.
+     * @param int    $product_id
+     * @param string $event
+     * @param int    $variation_id
+     * @return void
      */
     private function schedule( int $product_id, string $event, int $variation_id = 0 ): void {
+        /** Skip scheduling during import. */
         if ( self::$in_import ) {
             return;
         }
 
+        /** Skip if webhook URL is missing. */
         if ( empty( self::get_url() ) ) {
             return;
         }
 
+        /** Skip if credentials are missing. */
         if ( ! Settings::has_credentials() ) {
             return;
         }
 
+        /** Deduplicate scheduling within same request. */
         if ( ! in_array( $event, array( 'product.deleted', 'product.restored' ), true ) ) {
             $request_key = $product_id . '|' . $variation_id;
+
             if ( isset( self::$scheduled_in_request[ $request_key ] ) ) {
                 return;
             }
+
             self::$scheduled_in_request[ $request_key ] = true;
         }
 
+        /** Fallback to immediate dispatch if AS unavailable. */
         if ( ! function_exists( 'as_schedule_single_action' ) ) {
             $this->dispatch_webhook( $product_id, $event, $variation_id );
             return;
         }
 
+        /** Build action arguments. */
         $args = array( $product_id, $event, $variation_id );
 
+        /** Check for already pending identical actions. */
         $pending = as_get_scheduled_actions(
             array(
                 'hook'   => self::AS_HOOK,
@@ -243,10 +293,12 @@ class ProductWebhook {
             'ids'
         );
 
+        /** Skip scheduling if already pending. */
         if ( ! empty( $pending ) ) {
             return;
         }
 
+        /** Schedule new Action Scheduler job. */
         as_schedule_single_action(
             time() + self::DISPATCH_DELAY,
             self::AS_HOOK,
@@ -255,21 +307,16 @@ class ProductWebhook {
         );
     }
 
-    // ─── Dispatcher (called by Action Scheduler) ──────────────────────────────
-
     /**
-     * Perform the HTTP POST to the webhook URL.
-     *
-     * Called asynchronously by Action Scheduler.
-     * Throwing an exception causes AS to retry automatically
-     * (default: up to 3 attempts with exponential back-off).
+     * Dispatch webhook via HTTP POST.
      *
      * @param int    $product_id
      * @param string $event
      * @param int    $variation_id
-     * @throws \Exception On HTTP failure, so AS can retry.
+     * @throws \Exception
      */
     public function dispatch_webhook( int $product_id, string $event, int $variation_id = 0 ): void {
+        /** Enforce concurrency limit. */
         if ( function_exists( 'as_get_scheduled_actions' ) ) {
             $running = as_get_scheduled_actions(
                 array(
@@ -292,8 +339,10 @@ class ProductWebhook {
             }
         }
 
+        /** Build webhook payload. */
         $payload = $this->build_payload( $product_id, $event, $variation_id );
 
+        /** Send HTTP POST request. */
         $response = wp_remote_post(
             self::get_url(),
             array(
@@ -308,6 +357,7 @@ class ProductWebhook {
             )
         );
 
+        /** Handle WP error response. */
         if ( is_wp_error( $response ) ) {
             throw new \Exception(
                 sprintf(
@@ -319,7 +369,9 @@ class ProductWebhook {
             );
         }
 
+        /** Validate HTTP response code. */
         $code = wp_remote_retrieve_response_code( $response );
+
         if ( $code < 200 || $code >= 300 ) {
             throw new \Exception(
                 sprintf(
@@ -333,10 +385,13 @@ class ProductWebhook {
     }
 
     /**
+     * Dispatch import webhook.
+     *
      * @param array $product_ids
-     * @throws \Exception On HTTP failure, so AS can retry.
+     * @throws \Exception
      */
     public function dispatch_import_webhook( array $product_ids ): void {
+        /** Build payload for import event. */
         $payload = array(
             'event'       => 'products.imported',
             'product_ids' => $product_ids,
@@ -346,6 +401,7 @@ class ProductWebhook {
             'api_secret'  => Settings::get_api_secret(),
         );
 
+        /** Send HTTP POST request. */
         $response = wp_remote_post(
             self::get_url(),
             array(
@@ -360,29 +416,21 @@ class ProductWebhook {
             )
         );
 
+        /** Handle WP error. */
         if ( is_wp_error( $response ) ) {
             throw new \Exception( '[AICommerce] Import webhook failed: ' . $response->get_error_message() );
         }
 
+        /** Validate HTTP response code. */
         $code = wp_remote_retrieve_response_code( $response );
+
         if ( $code < 200 || $code >= 300 ) {
             throw new \Exception( sprintf( '[AICommerce] Import webhook returned HTTP %d', $code ) );
         }
     }
 
-    // ─── Payload builder ─────────────────────────────────────────────────────
-
     /**
-     * Build a lightweight sync-trigger payload.
-     *
-     * The payload contains only identifiers and context — no full product data.
-     * The receiver is expected to call GET /aicommerce/v1/products/{id} to
-     * fetch the current product state.
-     *
-     * product_type rules:
-     *   - 'variation' when variation_id > 0 (stock change on a specific variation)
-     *   - WC product type ('simple', 'variable', etc.) otherwise
-     *   - 'unknown' if the product no longer exists (deleted)
+     * Build webhook payload.
      *
      * @param int    $product_id
      * @param string $event
@@ -390,6 +438,7 @@ class ProductWebhook {
      * @return array
      */
     private function build_payload( int $product_id, string $event, int $variation_id = 0 ): array {
+        /** Base payload structure. */
         $payload = array(
             'event'      => $event,
             'site_url'   => get_site_url(),
@@ -398,19 +447,19 @@ class ProductWebhook {
             'api_secret' => Settings::get_api_secret(),
         );
 
-        // Import-level event — no specific product
+        /** Handle import event (no product-specific data). */
         if ( 'products.imported' === $event ) {
             return $payload;
         }
 
-        // Deleted product — no WC object available
+        /** Handle deleted product (no WC object available). */
         if ( 'product.deleted' === $event ) {
             $payload['product_ids']  = array( $product_id );
             $payload['product_type'] = 'unknown';
             return $payload;
         }
 
-        // Variation event: product_type = 'variation', send both IDs
+        /** Handle variation event. */
         if ( $variation_id > 0 ) {
             $payload['product_ids']  = array( $product_id );
             $payload['variation_id'] = $variation_id;
@@ -418,8 +467,9 @@ class ProductWebhook {
             return $payload;
         }
 
-        // Regular product event: resolve type from WC object
-        $product                 = wc_get_product( $product_id );
+        /** Resolve product type from WooCommerce object. */
+        $product = wc_get_product( $product_id );
+
         $payload['product_ids']  = array( $product_id );
         $payload['product_type'] = $product ? $product->get_type() : 'unknown';
 

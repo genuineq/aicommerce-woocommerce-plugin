@@ -7,7 +7,7 @@
 
 namespace AICommerce;
 
-// Exit if accessed directly
+/** Exit if accessed directly. */
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
@@ -18,40 +18,61 @@ if ( ! defined( 'ABSPATH' ) ) {
 class UserAPI {
 
     /**
-     * Constructor
+     * Constructor.
+     *
+     * Registers REST API routes.
+     *
+     * @return void
      */
     public function __construct() {
+        /** Hook into REST API initialization. */
         add_action( 'rest_api_init', array( $this, 'register_routes' ) );
     }
 
     /**
-     * Register REST API routes
+     * Register REST API routes.
+     *
+     * @return void
      */
     public function register_routes(): void {
+        /** Register endpoint for fetching user data. */
         register_rest_route(
             'aicommerce/v1',
             '/user',
             array(
+                /** Allow GET requests. */
                 'methods'             => 'GET',
+                /** Callback for handling the request. */
                 'callback'            => array( $this, 'get_user' ),
+                /** Public access allowed. */
                 'permission_callback' => '__return_true',
             )
         );
     }
 
     /**
+     * Get user data endpoint.
+     *
      * GET /wp-json/aicommerce/v1/user?user_id=1
      *
-     * Returns full user information including WooCommerce customer data and order stats.
+     * Returns full user information including WooCommerce data.
+     *
+     * @param \WP_REST_Request $request
+     * @return \WP_REST_Response
      */
     public function get_user( \WP_REST_Request $request ): \WP_REST_Response {
+        /** Validate incoming request. */
         $validation = APIValidator::validate_request( $request );
+
+        /** Return error response if validation fails. */
         if ( ! $validation['valid'] ) {
             return APIValidator::error_response( $validation );
         }
 
+        /** Extract and sanitize user ID. */
         $user_id = absint( $request->get_param( 'user_id' ) );
 
+        /** Ensure user_id is provided and valid. */
         if ( $user_id <= 0 ) {
             return new \WP_REST_Response(
                 array(
@@ -63,8 +84,10 @@ class UserAPI {
             );
         }
 
+        /** Retrieve user by ID. */
         $user = get_user_by( 'id', $user_id );
 
+        /** Return error if user does not exist. */
         if ( ! $user ) {
             return new \WP_REST_Response(
                 array(
@@ -76,6 +99,7 @@ class UserAPI {
             );
         }
 
+        /** Return successful response with user data. */
         return new \WP_REST_Response(
             array(
                 'success' => true,
@@ -86,12 +110,13 @@ class UserAPI {
     }
 
     /**
-     * Build the full user data array.
+     * Build full user data array.
      *
      * @param \WP_User $user
      * @return array
      */
     private function build_user_data( \WP_User $user ): array {
+        /** Base user data structure. */
         $data = array(
             'id'                => $user->ID,
             'username'          => $user->user_login,
@@ -101,13 +126,19 @@ class UserAPI {
             'last_name'         => $user->last_name,
             'roles'             => $user->roles,
             'registered_at'     => $user->user_registered,
+            /** Generate avatar URL for user. */
             'avatar_url'        => get_avatar_url( $user->ID, array( 'size' => 96 ) ),
         );
 
-        // WooCommerce customer data
+        /** Add WooCommerce-specific data if available. */
         if ( class_exists( 'WC_Customer' ) ) {
+            /** Include billing address. */
             $data['billing']  = $this->get_billing( $user->ID );
+
+            /** Include shipping address. */
             $data['shipping'] = $this->get_shipping( $user->ID );
+
+            /** Include order statistics. */
             $data['orders']   = $this->get_order_stats( $user->ID );
         }
 
@@ -116,8 +147,12 @@ class UserAPI {
 
     /**
      * Get billing address data.
+     *
+     * @param int $user_id
+     * @return array
      */
     private function get_billing( int $user_id ): array {
+        /** Return billing-related user meta fields. */
         return array(
             'first_name' => get_user_meta( $user_id, 'billing_first_name', true ),
             'last_name'  => get_user_meta( $user_id, 'billing_last_name', true ),
@@ -135,8 +170,12 @@ class UserAPI {
 
     /**
      * Get shipping address data.
+     *
+     * @param int $user_id
+     * @return array
      */
     private function get_shipping( int $user_id ): array {
+        /** Return shipping-related user meta fields. */
         return array(
             'first_name' => get_user_meta( $user_id, 'shipping_first_name', true ),
             'last_name'  => get_user_meta( $user_id, 'shipping_last_name', true ),
@@ -152,21 +191,37 @@ class UserAPI {
     }
 
     /**
-     * Get WooCommerce order statistics for the user.
+     * Get WooCommerce order statistics.
+     *
+     * @param int $user_id
+     * @return array
      */
     private function get_order_stats( int $user_id ): array {
+        /** Get total number of orders. */
         $total_orders = wc_get_customer_order_count( $user_id );
+
+        /** Get total amount spent by the user. */
         $total_spent  = (float) wc_get_customer_total_spent( $user_id );
+
+        /** Calculate average order value. */
         $average      = $total_orders > 0 ? round( $total_spent / $total_orders, 2 ) : 0.0;
 
+        /** Retrieve last order. */
         $last_order      = wc_get_customer_last_order( $user_id );
+
+        /** Extract last order ID. */
         $last_order_id   = $last_order ? $last_order->get_id() : null;
+
+        /** Initialize last order date. */
         $last_order_date = null;
+
+        /** Extract last order date if available. */
         if ( $last_order ) {
             $date_created    = $last_order->get_date_created();
             $last_order_date = $date_created ? $date_created->date( 'Y-m-d H:i:s' ) : null;
         }
 
+        /** Return order statistics. */
         return array(
             'total_orders'        => $total_orders,
             'total_spent'         => $total_spent,
