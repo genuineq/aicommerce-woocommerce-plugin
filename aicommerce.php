@@ -199,61 +199,140 @@ class AICommerce {
         // Load text domain for translations
         load_plugin_textdomain( 'aicommerce', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 
-        // Load core classes
-        $this->load_core_classes();
+        // Load only the minimum classes needed by all contexts.
+        $this->load_shared_classes();
 
-        // Load admin functionality
+        // REST endpoints are needed only for REST requests.
+        if ( $this->is_rest_request() ) {
+            $this->load_rest_api();
+        }
+
+        // Frontend-only features.
+        if ( $this->is_frontend_request() ) {
+            $this->load_frontend();
+        }
+
+        // Admin UI is needed only in wp-admin.
         if ( is_admin() ) {
             $this->load_admin();
         }
+
+        // Background/sync modules loaded only where their events are relevant.
+        $this->load_webhook_modules();
     }
 
     /**
-     * Load core classes
+     * Load classes shared across multiple contexts.
      */
-    private function load_core_classes() {
+    private function load_shared_classes() {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-encryption.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-settings.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-jwt.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-rate-limiter.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-api-validator.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
+
+        // Guest cart cleanup
+        \AICommerce\CartStorage::register_cleanup();
+    }
+
+    /**
+     * Load REST API classes only for REST requests.
+     */
+    private function load_rest_api() {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-full-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-user-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-sse.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-sync.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-updater.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-webhook.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-order-webhook.php';
 
-        // Initialize APIs
         new \AICommerce\AuthAPI();
         new \AICommerce\ProductAPI();
         new \AICommerce\ProductFullAPI();
         new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
+        new \AICommerce\SSE();
+    }
 
-        // Initialize frontend features
+    /**
+     * Load frontend-only classes.
+     */
+    private function load_frontend() {
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-sync.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-iframe.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-guest-token.php';
+
         new \AICommerce\Iframe();
         new \AICommerce\GuestToken();
         new \AICommerce\CartSync();
+    }
 
-        // Auto-updater
-        new \AICommerce\Updater();
+    /**
+     * Load webhook and updater classes only in relevant contexts.
+     */
+    private function load_webhook_modules() {
+        $is_cron = defined( 'DOING_CRON' ) && DOING_CRON;
+        $is_cli  = defined( 'WP_CLI' ) && WP_CLI;
 
-        // Product webhook
-        new \AICommerce\ProductWebhook();
+        // Updater is relevant in wp-admin and scheduled update checks.
+        if ( is_admin() || $is_cron ) {
+            require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-updater.php';
+            new \AICommerce\Updater();
+        }
 
-        // Order webhook
-        new \AICommerce\OrderWebhook();
+        // Product webhooks are relevant in admin/rest/cron/CLI flows.
+        if ( is_admin() || $this->is_rest_request() || $is_cron || $is_cli ) {
+            require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-webhook.php';
+            new \AICommerce\ProductWebhook();
+        }
 
-        // Guest cart cleanup
-        \AICommerce\CartStorage::register_cleanup();
+        // Order webhooks can fire on checkout, admin status updates, and background tasks.
+        if ( $this->is_frontend_request() || is_admin() || $is_cron || $is_cli ) {
+            require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-order-webhook.php';
+            new \AICommerce\OrderWebhook();
+        }
+    }
+
+    /**
+     * Determine whether the current request is a REST request.
+     */
+    private function is_rest_request(): bool {
+        if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+            return true;
+        }
+
+        if ( isset( $_SERVER['REQUEST_URI'] ) ) {
+            $rest_prefix = trailingslashit( rest_get_url_prefix() );
+            $request_uri = wp_unslash( $_SERVER['REQUEST_URI'] );
+            return false !== strpos( $request_uri, $rest_prefix );
+        }
+
+        return false;
+    }
+
+    /**
+     * Determine whether the current request is a frontend page request.
+     */
+    private function is_frontend_request(): bool {
+        if ( is_admin() ) {
+            return false;
+        }
+
+        if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
+            return false;
+        }
+
+        if ( $this->is_rest_request() ) {
+            return false;
+        }
+
+        if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
