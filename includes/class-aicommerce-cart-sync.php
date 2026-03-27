@@ -774,10 +774,12 @@ class CartSync {
             return;
         }
 
+        $suffix = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? '' : '.min';
+
         /** Enqueue cart synchronization script. */
         wp_enqueue_script(
             'aicommerce-cart-sync',
-            AICOMMERCE_PLUGIN_URL . 'assets/js/cart-sync.js',
+            AICOMMERCE_PLUGIN_URL . 'assets/js/cart-sync' . $suffix . '.js',
             array( 'aicommerce-guest-token' ),
             AICOMMERCE_VERSION,
             true
