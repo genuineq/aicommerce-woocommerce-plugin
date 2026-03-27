@@ -255,19 +255,6 @@ class CartSync {
             return;
         }
 
-        /**
-         * Short-circuit heavy sync when stored cart hasn't changed.
-         * We store the last synced user cart version in WC session.
-         */
-        if ( function_exists( 'WC' ) && WC() && WC()->session ) {
-            $meta           = CartStorage::get_user_cart_meta( $user_id );
-            $stored_version = (int) ( $meta['version'] ?? 0 );
-            $last_synced    = (int) WC()->session->get( 'aicommerce_user_cart_version', 0 );
-            if ( $stored_version > 0 && $last_synced === $stored_version ) {
-                return;
-            }
-        }
-
         /** Prevent duplicate sync during the same request. */
         static $synced = false;
         if ( $synced ) {
@@ -551,29 +538,6 @@ class CartSync {
      * @param array  $cart_item_data Additional cart item data.
      */
     public function sync_wc_cart_to_user_meta( string $cart_item_key = '', int $product_id = 0, int $quantity = 0, int $variation_id = 0, array $variation = array(), array $cart_item_data = array() ): void {
-        /** Sync only for logged-in users. */
-        if ( ! is_user_logged_in() ) {
-            return;
-        }
-
-        /** Resolve current user ID. */
-        $user_id = get_current_user_id();
-
-        /** Stop if user ID is invalid. */
-        if ( ! $user_id ) {
-            return;
-        }
-
-        /**
-         * Skip only AICommerce REST API calls.
-         *
-         * Those requests manage user_meta directly, so an extra sync here is not needed.
-         * WooCommerce Store API requests must still pass through this sync.
-         */
-        if ( doing_action( 'woocommerce_add_to_cart' ) && isset( $_SERVER['REQUEST_URI'] ) && strpos( $_SERVER['REQUEST_URI'], '/wp-json/aicommerce/v1/' ) !== false ) {
-            return;
-        }
-
         /** Ensure WooCommerce is available. */
         if ( ! class_exists( 'WooCommerce' ) || ! function_exists( 'WC' ) ) {
             return;
@@ -587,8 +551,74 @@ class CartSync {
             return;
         }
 
-        /** Persist current WooCommerce cart into user storage. */
-        $this->update_user_cart_from_wc( $user_id, $wc_cart );
+        /**
+         * Skip AICommerce REST API calls.
+         *
+         * Those requests already update persistent storage directly.
+         */
+        if ( doing_action( 'woocommerce_add_to_cart' ) && isset( $_SERVER['REQUEST_URI'] ) && strpos( $_SERVER['REQUEST_URI'], '/wp-json/aicommerce/v1/' ) !== false ) {
+            return;
+        }
+
+        if ( is_user_logged_in() ) {
+            /** Resolve current user ID. */
+            $user_id = get_current_user_id();
+
+            /** Stop if user ID is invalid. */
+            if ( ! $user_id ) {
+                return;
+            }
+
+            /** Persist current WooCommerce cart into user storage. */
+            $this->update_user_cart_from_wc( $user_id, $wc_cart );
+            return;
+        }
+
+        /** Guest flow: keep guest persistent cart aligned with WooCommerce cart. */
+        $guest_token = '';
+        if ( isset( $_COOKIE['aicommerce_guest_token'] ) ) {
+            $guest_token = sanitize_text_field( wp_unslash( $_COOKIE['aicommerce_guest_token'] ) );
+        }
+
+        if ( empty( $guest_token ) || ! preg_match( '/^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $guest_token ) ) {
+            return;
+        }
+
+        $this->update_guest_cart_from_wc( $guest_token, $wc_cart );
+    }
+
+    /**
+     * Update guest cart storage from WooCommerce cart.
+     *
+     * @param string  $guest_token Guest token.
+     * @param WC_Cart $wc_cart     WooCommerce cart instance.
+     */
+    private function update_guest_cart_from_wc( string $guest_token, \WC_Cart $wc_cart ): void {
+        /** Prevent recursive updates during the same request. */
+        static $updating_guest = false;
+        if ( $updating_guest ) {
+            return;
+        }
+        $updating_guest = true;
+
+        $wc_cart_items = array();
+        foreach ( $wc_cart->get_cart() as $cart_item_key => $cart_item ) {
+            $variation_data = isset( $cart_item['variation'] ) ? $cart_item['variation'] : array();
+            if ( ! empty( $cart_item['variation_id'] ) ) {
+                $variation_data = array_merge( array( 'variation_id' => (int) $cart_item['variation_id'] ), $variation_data );
+            }
+
+            $wc_cart_items[] = array(
+                'key'            => $cart_item_key,
+                'product_id'     => $cart_item['product_id'],
+                'quantity'       => $cart_item['quantity'],
+                'variation_data' => $variation_data,
+                'added_at'       => time(),
+            );
+        }
+
+        CartStorage::save_cart( $guest_token, $wc_cart_items );
+        $updating_guest = false;
     }
 
     /**

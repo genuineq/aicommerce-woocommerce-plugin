@@ -73,6 +73,50 @@ class CartStorage {
     }
 
     /**
+     * Compute a stable signature for cart items to detect changes.
+     *
+     * @param array $items Cart items
+     * @return string
+     */
+    private static function compute_items_signature( array $items ): string {
+        $normalized = array();
+
+        foreach ( $items as $item ) {
+            $product_id   = (int) ( $item['product_id'] ?? 0 );
+            $quantity     = (int) ( $item['quantity'] ?? 0 );
+            $variation_id = isset( $item['variation_data']['variation_id'] ) ? (int) $item['variation_data']['variation_id'] : 0;
+            $variation    = isset( $item['variation_data'] ) && is_array( $item['variation_data'] ) ? $item['variation_data'] : array();
+
+            if ( isset( $variation['variation_id'] ) ) {
+                $variation['variation_id'] = (int) $variation['variation_id'];
+            }
+            ksort( $variation );
+
+            $normalized[] = array(
+                'product_id'   => $product_id,
+                'variation_id' => $variation_id,
+                'quantity'     => $quantity,
+                'variation'    => $variation,
+            );
+        }
+
+        usort(
+            $normalized,
+            static function ( $a, $b ) {
+                if ( $a['product_id'] !== $b['product_id'] ) {
+                    return $a['product_id'] <=> $b['product_id'];
+                }
+                if ( $a['variation_id'] !== $b['variation_id'] ) {
+                    return $a['variation_id'] <=> $b['variation_id'];
+                }
+                return $a['quantity'] <=> $b['quantity'];
+            }
+        );
+
+        return md5( wp_json_encode( $normalized ) );
+    }
+
+    /**
      * Normalize user cart data structure.
      *
      * @param mixed $cart_data Raw user_meta value
@@ -227,10 +271,16 @@ class CartStorage {
         $existing  = get_option( $key, null );
         $cart_data = self::normalize_guest_cart_data( $existing );
 
+        $incoming_sig = self::compute_items_signature( $items );
+        $existing_sig = isset( $existing['items_sig'] ) ? (string) $existing['items_sig'] : self::compute_items_signature( (array) $cart_data['items'] );
+
         $cart_data['items']      = $items;
         $cart_data['updated_at'] = time();
         $cart_data['expires_at'] = time() + self::CART_EXPIRATION;
-        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        if ( $incoming_sig !== $existing_sig ) {
+            $cart_data['version'] = (int) $cart_data['version'] + 1;
+        }
+        $cart_data['items_sig']  = $incoming_sig;
         $cart_data               = self::normalize_guest_cart_data( $cart_data );
 
         return self::save_guest_cart_data( $guest_token, $cart_data );
@@ -281,6 +331,7 @@ class CartStorage {
         $cart_data['updated_at'] = time();
         $cart_data['expires_at'] = time() + self::CART_EXPIRATION;
         $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data['items_sig']  = self::compute_items_signature( $cart );
         $cart_data               = self::normalize_guest_cart_data( $cart_data );
 
         if ( self::save_guest_cart_data( $guest_token, $cart_data ) ) {
@@ -424,6 +475,7 @@ class CartStorage {
         $cart_data['updated_at'] = time();
         $cart_data['expires_at'] = time() + self::CART_EXPIRATION;
         $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data['items_sig']  = self::compute_items_signature( $cart );
         $cart_data               = self::normalize_guest_cart_data( $cart_data );
 
         if ( self::save_guest_cart_data( $guest_token, $cart_data ) ) {
@@ -507,9 +559,15 @@ class CartStorage {
         $existing  = get_user_meta( $user_id, 'aicommerce_cart', true );
         $cart_data = self::normalize_user_cart_data( $existing );
 
+        $incoming_sig = self::compute_items_signature( $items );
+        $existing_sig = isset( $existing['items_sig'] ) ? (string) $existing['items_sig'] : self::compute_items_signature( (array) $cart_data['items'] );
+
         $cart_data['items']      = $items;
         $cart_data['updated_at'] = time();
-        $cart_data['version']    = (int) $cart_data['version'] + 1;
+        if ( $incoming_sig !== $existing_sig ) {
+            $cart_data['version'] = (int) $cart_data['version'] + 1;
+        }
+        $cart_data['items_sig']  = $incoming_sig;
         $cart_data               = self::normalize_user_cart_data( $cart_data );
 
         return update_user_meta( $user_id, 'aicommerce_cart', $cart_data );
@@ -550,6 +608,7 @@ class CartStorage {
         $cart_data['items']      = $cart;
         $cart_data['updated_at'] = time();
         $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data['items_sig']  = self::compute_items_signature( $cart );
         $cart_data               = self::normalize_user_cart_data( $cart_data );
 
         if ( update_user_meta( $user_id, 'aicommerce_cart', $cart_data ) ) {
@@ -582,6 +641,7 @@ class CartStorage {
         $cart_data['items']      = $cart;
         $cart_data['updated_at'] = time();
         $cart_data['version']    = (int) $cart_data['version'] + 1;
+        $cart_data['items_sig']  = self::compute_items_signature( $cart );
         $cart_data               = self::normalize_user_cart_data( $cart_data );
 
         if ( update_user_meta( $user_id, 'aicommerce_cart', $cart_data ) ) {
@@ -619,6 +679,46 @@ class CartStorage {
      * Register the recurring cleanup action.
      * Called once on plugin init. Safe to call multiple times — AS deduplicates.
      */
+    public static function mark_as_ai_cart( string $guest_token ): void {
+        if ( empty( $guest_token ) ) {
+            return;
+        }
+        $key       = self::get_storage_key( $guest_token );
+        $cart_data = get_option( $key, null );
+        if ( is_array( $cart_data ) && empty( $cart_data['ai_cart'] ) ) {
+            $cart_data['ai_cart'] = true;
+            update_option( $key, $cart_data, false );
+        }
+    }
+
+    public static function has_ai_flag( string $guest_token ): bool {
+        if ( empty( $guest_token ) ) {
+            return false;
+        }
+        $key       = self::get_storage_key( $guest_token );
+        $cart_data = get_option( $key, null );
+        return is_array( $cart_data ) && ! empty( $cart_data['ai_cart'] );
+    }
+
+    public static function mark_as_ai_user_cart( int $user_id ): void {
+        if ( $user_id <= 0 ) {
+            return;
+        }
+        $cart_data = get_user_meta( $user_id, 'aicommerce_cart', true );
+        if ( is_array( $cart_data ) && empty( $cart_data['ai_cart'] ) ) {
+            $cart_data['ai_cart'] = true;
+            update_user_meta( $user_id, 'aicommerce_cart', $cart_data );
+        }
+    }
+
+    public static function has_ai_user_flag( int $user_id ): bool {
+        if ( $user_id <= 0 ) {
+            return false;
+        }
+        $cart_data = get_user_meta( $user_id, 'aicommerce_cart', true );
+        return is_array( $cart_data ) && ! empty( $cart_data['ai_cart'] );
+    }
+
     public static function register_cleanup(): void {
         add_action( 'aicommerce_cleanup_guest_carts', array( static::class, 'cleanup_expired_carts' ) );
 
