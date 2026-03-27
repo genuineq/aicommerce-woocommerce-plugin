@@ -679,6 +679,46 @@ class CartStorage {
      * Register the recurring cleanup action.
      * Called once on plugin init. Safe to call multiple times — AS deduplicates.
      */
+    public static function mark_as_ai_cart( string $guest_token ): void {
+        if ( empty( $guest_token ) ) {
+            return;
+        }
+        $key       = self::get_storage_key( $guest_token );
+        $cart_data = get_option( $key, null );
+        if ( is_array( $cart_data ) && empty( $cart_data['ai_cart'] ) ) {
+            $cart_data['ai_cart'] = true;
+            update_option( $key, $cart_data, false );
+        }
+    }
+
+    public static function has_ai_flag( string $guest_token ): bool {
+        if ( empty( $guest_token ) ) {
+            return false;
+        }
+        $key       = self::get_storage_key( $guest_token );
+        $cart_data = get_option( $key, null );
+        return is_array( $cart_data ) && ! empty( $cart_data['ai_cart'] );
+    }
+
+    public static function mark_as_ai_user_cart( int $user_id ): void {
+        if ( $user_id <= 0 ) {
+            return;
+        }
+        $cart_data = get_user_meta( $user_id, 'aicommerce_cart', true );
+        if ( is_array( $cart_data ) && empty( $cart_data['ai_cart'] ) ) {
+            $cart_data['ai_cart'] = true;
+            update_user_meta( $user_id, 'aicommerce_cart', $cart_data );
+        }
+    }
+
+    public static function has_ai_user_flag( int $user_id ): bool {
+        if ( $user_id <= 0 ) {
+            return false;
+        }
+        $cart_data = get_user_meta( $user_id, 'aicommerce_cart', true );
+        return is_array( $cart_data ) && ! empty( $cart_data['ai_cart'] );
+    }
+
     public static function register_cleanup(): void {
         add_action( 'aicommerce_cleanup_guest_carts', array( static::class, 'cleanup_expired_carts' ) );
 
