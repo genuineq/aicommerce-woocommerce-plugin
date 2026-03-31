@@ -281,6 +281,40 @@ class CartAPI {
         }
         
         $variation_data_array = self::normalize_variation_data_for_wc( $product_id, $variation_data_array );
+
+        /**
+         * Idempotency / duplicate protection:
+         * In practice, we can receive near-simultaneous duplicate `cart/add` calls
+         * (double-submit, multiple widget instances, race with sync).
+         * Without protection, quantities can be incremented twice.
+         */
+        $lockTtlSeconds = 5;
+        $variationSig = md5( wp_json_encode( $variation_data_array ) );
+        if ( ! empty( $guest_token ) ) {
+            $lockKey = 'aicommerce_cart_add_lock_guest_' . md5( $guest_token . ':' . (int) $product_id . ':' . (int) $quantity . ':' . $variationSig );
+        } else {
+            $lockKey = 'aicommerce_cart_add_lock_user_' . md5( (string) $user_id . ':' . (int) $product_id . ':' . (int) $quantity . ':' . $variationSig );
+        }
+
+        if ( function_exists( 'get_transient' ) && function_exists( 'set_transient' ) ) {
+            if ( (bool) get_transient( $lockKey ) ) {
+                // Return current cart count without mutating anything.
+                $cart_count = ! empty( $guest_token )
+                    ? CartStorage::get_cart_count( (string) $guest_token )
+                    : CartStorage::get_user_cart_count( (int) $user_id );
+
+                return new \WP_REST_Response(
+                    array(
+                        'success' => true,
+                        'message' => __( 'Duplicate add ignored.', 'aicommerce' ),
+                        'cart_count' => $cart_count,
+                    ),
+                    200
+                );
+            }
+
+            set_transient( $lockKey, 1, $lockTtlSeconds );
+        }
         
         if ( ! empty( $guest_token ) ) {
             $cart = CartStorage::add_item( $guest_token, $product_id, $quantity, $variation_data_array );
@@ -674,6 +708,32 @@ class CartAPI {
         } else {
             $user_id = null;
         }
+
+        /**
+         * Prevent concurrent sync_to_wc_session calls for the same cart identity.
+         *
+         * Without a lock, two near-simultaneous requests can both see "item absent"
+         * and each run add_to_cart(), doubling quantities.
+         */
+        $lockTtlSeconds = 6;
+        $lockKey = ! empty( $guest_token )
+            ? 'aicommerce_wc_sync_lock_guest_' . md5( (string) $guest_token )
+            : 'aicommerce_wc_sync_lock_user_' . (int) $user_id;
+
+        if ( function_exists( 'get_transient' ) && function_exists( 'set_transient' ) ) {
+            if ( (bool) get_transient( $lockKey ) ) {
+                return new \WP_REST_Response(
+                    array(
+                        'success' => true,
+                        'message' => __( 'Cart sync skipped (concurrent sync in progress).', 'aicommerce' ),
+                        'synced'  => false,
+                    ),
+                    200
+                );
+            }
+
+            set_transient( $lockKey, 1, $lockTtlSeconds );
+        }
         
         // Get cart based on identifier type
         if ( ! empty( $guest_token ) ) {
@@ -690,17 +750,10 @@ class CartAPI {
                 400
             );
         }
-        
-        if ( empty( $guest_cart ) ) {
-            return new \WP_REST_Response(
-                array(
-                    'success' => true,
-                    'message' => __( 'Cart is already empty.', 'aicommerce' ),
-                    'synced'  => false,
-                ),
-                200
-            );
-        }
+
+        // When persistent AICommerce cart is empty, WooCommerce UI may still keep
+        // stale items in the session cart. In that case we must also clear WC cart.
+        $shouldClearWcCart = empty( $guest_cart );
         
         if ( ! class_exists( 'WooCommerce' ) ) {
             return new \WP_REST_Response(
@@ -767,6 +820,26 @@ class CartAPI {
                     ) : null,
                 ),
                 500
+            );
+        }
+
+        if ( $shouldClearWcCart ) {
+            if ( ! empty( $cart->get_cart() ) ) {
+                $cart->empty_cart();
+                $cart->calculate_totals();
+
+                if ( WC()->session ) {
+                    WC()->session->set( 'cart', $cart->get_cart_for_session() );
+                }
+            }
+
+            return new \WP_REST_Response(
+                array(
+                    'success' => true,
+                    'message' => __( 'Cart is already empty.', 'aicommerce' ),
+                    'synced'  => false,
+                ),
+                200
             );
         }
         
