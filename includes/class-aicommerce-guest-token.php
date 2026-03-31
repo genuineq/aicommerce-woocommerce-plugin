@@ -277,10 +277,12 @@ class GuestToken {
             return;
         }
 
+        $suffix = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? '' : '.min';
+
         /** Enqueue guest token frontend script. */
         wp_enqueue_script(
             'aicommerce-guest-token',
-            AICOMMERCE_PLUGIN_URL . 'assets/js/guest-token.js',
+            AICOMMERCE_PLUGIN_URL . 'assets/js/guest-token' . $suffix . '.js',
             array(),
             AICOMMERCE_VERSION,
             true

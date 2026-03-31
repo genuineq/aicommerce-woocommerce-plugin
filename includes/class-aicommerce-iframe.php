@@ -130,10 +130,12 @@ class Iframe {
 			return;
 		}
 
+		$suffix = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? '' : '.min';
+
 		/** Enqueue iframe frontend stylesheet. */
 		wp_enqueue_style(
 			'aicommerce-iframe',
-			AICOMMERCE_PLUGIN_URL . 'assets/css/iframe.css',
+			AICOMMERCE_PLUGIN_URL . 'assets/css/iframe' . $suffix . '.css',
 			array(),
 			AICOMMERCE_VERSION
 		);
@@ -141,7 +143,7 @@ class Iframe {
 		/** Enqueue iframe frontend script. */
 		wp_enqueue_script(
 			'aicommerce-iframe',
-			AICOMMERCE_PLUGIN_URL . 'assets/js/iframe.js',
+			AICOMMERCE_PLUGIN_URL . 'assets/js/iframe' . $suffix . '.js',
 			array( 'aicommerce-guest-token' ),
 			AICOMMERCE_VERSION,
 			true

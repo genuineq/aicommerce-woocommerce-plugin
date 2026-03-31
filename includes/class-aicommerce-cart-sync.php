@@ -99,6 +99,21 @@ class CartSync {
         }
 
         /**
+         * Prevent concurrent guest cart sync during the same timeframe.
+         *
+         * This avoids a race where two requests both see an item missing in WC
+         * and both call add_to_cart(), doubling quantities.
+         */
+        $lockTtlSeconds = 6;
+        $lockKey = 'aicommerce_guest_cart_page_sync_lock_' . md5( (string) $guest_token );
+        if ( function_exists( 'get_transient' ) && function_exists( 'set_transient' ) ) {
+            if ( (bool) get_transient( $lockKey ) ) {
+                return;
+            }
+            set_transient( $lockKey, 1, $lockTtlSeconds );
+        }
+
+        /**
          * Short-circuit heavy merge when nothing changed.
          * We store the last synced guest cart version in WC session.
          */
@@ -123,11 +138,6 @@ class CartSync {
         /** Load stored guest cart from persistent storage. */
         $stored_cart = CartStorage::get_cart( $guest_token );
 
-        /** Nothing to sync if stored cart is empty. */
-        if ( empty( $stored_cart ) ) {
-            return;
-        }
-
         /** Ensure WooCommerce is available before accessing the cart. */
         if ( ! class_exists( 'WooCommerce' ) || ! function_exists( 'WC' ) ) {
             return;
@@ -138,6 +148,24 @@ class CartSync {
 
         /** Stop if cart instance is missing or invalid. */
         if ( ! $wc_cart || ! is_a( $wc_cart, 'WC_Cart' ) ) {
+            return;
+        }
+
+        /**
+         * If the persistent guest cart is empty, we must also clear
+         * WooCommerce session cart; otherwise stale items can remain in UI
+         * after refresh while AI (persistent storage) reports an empty cart.
+         */
+        if ( empty( $stored_cart ) ) {
+            if ( ! empty( $wc_cart->get_cart() ) ) {
+                $wc_cart->empty_cart();
+                $wc_cart->calculate_totals();
+
+                if ( WC()->session ) {
+                    WC()->session->set( 'cart', $wc_cart->get_cart_for_session() );
+                }
+            }
+
             return;
         }
 
@@ -774,10 +802,14 @@ class CartSync {
             return;
         }
 
+        // Use the non-minified cart-sync.js to ensure runtime fixes are applied
+        // immediately without requiring a build step for cart-sync.min.js.
+        $suffix = '';
+
         /** Enqueue cart synchronization script. */
         wp_enqueue_script(
             'aicommerce-cart-sync',
-            AICOMMERCE_PLUGIN_URL . 'assets/js/cart-sync.js',
+            AICOMMERCE_PLUGIN_URL . 'assets/js/cart-sync' . $suffix . '.js',
             array( 'aicommerce-guest-token' ),
             AICOMMERCE_VERSION,
             true

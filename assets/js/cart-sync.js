@@ -15,6 +15,7 @@
     let isSyncing = false;
     let pollTimer = null;
     let lastHash  = null;
+    let eventSource = null;
 
     /** External configuration (if provided). */
     const _cfg = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig)
@@ -218,6 +219,43 @@
         pollTimer = setTimeout(tick, POLL_FAST_MS);
     }
 
+    /**
+     * Listen to SSE cart updates and sync immediately.
+     *
+     * This makes remove operations feel instant as well (polling-only can miss
+     * the right moment when the widget/popup lifecycle changes).
+     */
+    function startSseCartUpdates() {
+        if (eventSource) return;
+        if (!window.EventSource) return;
+        if (!hasCartIdentifier()) return;
+
+        const guestToken = getGuestToken();
+        if (!guestToken) return;
+
+        const url = API_BASE + '/sse/cart?guest_token=' + encodeURIComponent(guestToken);
+        try {
+            eventSource = new EventSource(url);
+        } catch (e) {
+            return;
+        }
+
+        eventSource.addEventListener('cart_updated', () => {
+            // syncCartToWCSession already has cooldown + in-flight guard.
+            syncCartToWCSession();
+        });
+
+        eventSource.addEventListener('error', () => {
+            // On any SSE error, keep polling mechanism as fallback.
+            try {
+                if (eventSource) {
+                    eventSource.close();
+                }
+            } catch (e) {}
+            eventSource = null;
+        });
+    }
+
     /** Stop polling mechanism. */
     function stopPolling() {
         if (!pollTimer) return;
@@ -246,6 +284,10 @@
         if (_autoSyncOnLoad && hasCartIdentifier()) {
             syncCartToWCSession();
         }
+
+        // Keep WooCommerce fragments in sync with guest cart updates
+        // triggered by server-side cart operations.
+        startSseCartUpdates();
 
         /** Handle popup open → start polling. */
         window.addEventListener('aicommerce:popup_opened', () => {
