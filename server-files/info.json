@@ -1,14 +1,14 @@
 {
     "name": "AICommerce",
     "slug": "aicommerce",
-    "version": "1.5.2",
+    "version": "1.4.7",
     "requires": "5.8",
     "tested": "9.0",
     "requires_php": "7.4",
     "author": "Genuineq",
     "homepage": "https://genuineq.com",
-    "last_updated": "2026-03-27",
-    "download_url": "https://github.com/genuineq/aicommerce-woocommerce-plugin/releases/download/v1.5.2/aicommerce.zip",
+    "last_updated": "2026-03-31",
+    "download_url": "https://github.com/genuineq/aicommerce-woocommerce-plugin/releases/download/v1.4.7/aicommerce.zip",
     "sections": {
         "description": "AICommerce",
         "changelog": ""
