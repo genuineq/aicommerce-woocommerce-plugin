@@ -2,8 +2,8 @@
  * AICommerce Cart Synchronization
  *
  * Syncs guest/user cart with WooCommerce session.
- * - Polls /cart/hash while popup is open
- * - One-time sync on load, focus, visibility change
+ * - Polls lightweight cart meta while popup is open
+ * - Syncs on load, focus, and visibility changes only when version changes
  */
 (function() {
     'use strict';
@@ -14,8 +14,7 @@
     /** Internal state flags. */
     let isSyncing = false;
     let pollTimer = null;
-    let lastHash  = null;
-    let eventSource = null;
+    let lastVersion = 0;
 
     /** External configuration (if provided). */
     const _cfg = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig)
@@ -39,11 +38,7 @@
     const POLL_SLOW_MS = 12000;  // after first minute
     const POLL_FAST_WINDOW_MS = 60000;
 
-    /** Stop polling after inactivity inside the popup (ms). */
-    const INACTIVITY_STOP_MS = 120000; // 2 minutes
-    let lastActivityAt = Date.now();
     let pollingStartedAt = 0;
-    let popupOpen = false;
 
     /** Retrieve guest token if available. */
     function getGuestToken() {
@@ -84,19 +79,15 @@
         return true;
     }
 
-    function markActivity() {
-        lastActivityAt = Date.now();
-    }
-
     /**
-     * Lightweight cart hash fetch (read-only).
+     * Lightweight cart meta fetch (read-only).
      *
      * - No writes
      * - Fast (<10ms server-side)
      *
-     * @returns {Promise<string|null>}
+     * @returns {Promise<{hash:string|null, version:number, count:number}|null>}
      */
-    async function fetchCartHash() {
+    async function fetchCartMeta() {
         const guestToken = getGuestToken();
 
         /** Build request URL. */
@@ -110,12 +101,14 @@
         }
 
         try {
-            /** Execute request. */
             const res  = await fetch(url, { credentials: 'same-origin' });
             const data = await res.json();
 
-            /** Return hash if available. */
-            return data.hash || null;
+            return {
+                hash: data.hash || null,
+                version: Number(data.version || 0),
+                count: Number(data.count || 0),
+            };
         } catch (e) {
             return null;
         }
@@ -151,6 +144,9 @@
 
             /** Handle successful sync. */
             if (data && data.success) {
+                if (typeof data.version !== 'undefined') {
+                    lastVersion = Number(data.version || 0);
+                }
 
                 /** Refresh WooCommerce fragments if jQuery is available. */
                 if (typeof jQuery !== 'undefined') {
@@ -173,20 +169,19 @@
     }
 
     /**
-     * Start polling cart hash with adaptive backoff.
+     * Start polling cart version with adaptive backoff.
      *
-     * - Captures initial hash
-     * - Syncs only when hash changes
+     * - Captures initial version
+     * - Syncs only when version changes
      */
     async function startPolling() {
         if (pollTimer) return;
         if (!hasCartIdentifier()) return;
         pollingStartedAt = Date.now();
         hasUserInteracted = true;
-        markActivity();
-
-        /** Capture baseline hash. */
-        lastHash = await fetchCartHash();
+        /** Capture baseline version. */
+        const initialMeta = await fetchCartMeta();
+        lastVersion = initialMeta ? Number(initialMeta.version || 0) : 0;
 
         const tick = async () => {
             if (!pollTimer) return;
@@ -197,17 +192,11 @@
                 return;
             }
 
-            /** Stop polling after inactivity while popup is open. */
-            if (popupOpen && Date.now() - lastActivityAt > INACTIVITY_STOP_MS) {
-                stopPolling();
-                return;
-            }
+            const meta = await fetchCartMeta();
 
-            const hash = await fetchCartHash();
-
-            /** Sync only if hash changed. */
-            if (hash && hash !== lastHash) {
-                lastHash = hash;
+            /** Sync only if version changed. */
+            if (meta && Number(meta.version || 0) > lastVersion) {
+                lastVersion = Number(meta.version || 0);
                 await syncCartToWCSession();
             }
 
@@ -217,43 +206,6 @@
         };
 
         pollTimer = setTimeout(tick, POLL_FAST_MS);
-    }
-
-    /**
-     * Listen to SSE cart updates and sync immediately.
-     *
-     * This makes remove operations feel instant as well (polling-only can miss
-     * the right moment when the widget/popup lifecycle changes).
-     */
-    function startSseCartUpdates() {
-        if (eventSource) return;
-        if (!window.EventSource) return;
-        if (!hasCartIdentifier()) return;
-
-        const guestToken = getGuestToken();
-        if (!guestToken) return;
-
-        const url = API_BASE + '/sse/cart?guest_token=' + encodeURIComponent(guestToken);
-        try {
-            eventSource = new EventSource(url);
-        } catch (e) {
-            return;
-        }
-
-        eventSource.addEventListener('cart_updated', () => {
-            // syncCartToWCSession already has cooldown + in-flight guard.
-            syncCartToWCSession();
-        });
-
-        eventSource.addEventListener('error', () => {
-            // On any SSE error, keep polling mechanism as fallback.
-            try {
-                if (eventSource) {
-                    eventSource.close();
-                }
-            } catch (e) {}
-            eventSource = null;
-        });
     }
 
     /** Stop polling mechanism. */
@@ -273,31 +225,31 @@
      * - Tab visibility + focus sync
      */
     function init() {
-        // Track activity while popup is open (used to stop polling after inactivity).
-        const modal = document.getElementById('aicommerce-iframe-modal');
-        if (modal) {
-            const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
-            activityEvents.forEach((evt) => modal.addEventListener(evt, markActivity, { passive: true }));
+        async function syncIfVersionChanged() {
+            if (!hasCartIdentifier()) return;
+
+            const meta = await fetchCartMeta();
+            if (!meta) return;
+
+            const version = Number(meta.version || 0);
+            if (version > lastVersion) {
+                lastVersion = version;
+                await syncCartToWCSession();
+            }
         }
 
         /** Optional initial sync (e.g. cart/checkout pages). */
         if (_autoSyncOnLoad && hasCartIdentifier()) {
-            syncCartToWCSession();
+            syncIfVersionChanged();
         }
-
-        // Keep WooCommerce fragments in sync with guest cart updates
-        // triggered by server-side cart operations.
-        startSseCartUpdates();
 
         /** Handle popup open → start polling. */
         window.addEventListener('aicommerce:popup_opened', () => {
             hasUserInteracted = true;
-            popupOpen = true;
-            markActivity();
 
             /** Ensure WC session is synced before polling starts. */
             if (hasCartIdentifier()) {
-                syncCartToWCSession().finally(startPolling);
+                syncIfVersionChanged().finally(startPolling);
             } else {
                 // No identifier: avoid useless polling / sync calls.
             }
@@ -305,21 +257,20 @@
 
         /** Handle popup close → stop polling. */
         window.addEventListener('aicommerce:popup_closed', () => {
-            popupOpen = false;
             stopPolling();
         });
 
         /** Sync when returning to visible tab. */
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden && hasUserInteracted && hasCartIdentifier()) {
-                syncCartToWCSession();
+                syncIfVersionChanged();
             }
         });
 
         /** Sync on window focus. */
         window.addEventListener('focus', () => {
             if (hasUserInteracted && hasCartIdentifier()) {
-                syncCartToWCSession();
+                syncIfVersionChanged();
             }
         });
     }

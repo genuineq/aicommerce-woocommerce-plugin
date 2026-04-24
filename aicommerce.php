@@ -231,6 +231,7 @@ class AICommerce {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-rate-limiter.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-api-validator.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-storage.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-reconciler.php';
 
         // Guest cart cleanup
         \AICommerce\CartStorage::register_cleanup();
@@ -240,19 +241,17 @@ class AICommerce {
      * Load REST API classes only for REST requests.
      */
     private function load_rest_api() {
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
+        // require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-auth-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-product-full-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-user-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-cart-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/class-aicommerce-sse.php';
 
-        new \AICommerce\AuthAPI();
+        // new \AICommerce\AuthAPI();
         new \AICommerce\ProductAPI();
         new \AICommerce\ProductFullAPI();
         new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
-        new \AICommerce\SSE();
     }
 
     /**
