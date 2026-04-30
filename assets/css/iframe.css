@@ -234,6 +234,22 @@
         height: 50px;
         font-size: 20px;
     }
+
+    .aicommerce-iframe-button--with-label {
+        width: auto;
+        height: 50px;
+        max-width: calc(100vw - 30px);
+        border-radius: 25px;
+        padding: 0 16px 0 14px;
+        gap: 8px;
+    }
+
+    .aicommerce-iframe-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 16px;
+    }
     
     .aicommerce-iframe-position-top-left,
     .aicommerce-iframe-position-top-right,

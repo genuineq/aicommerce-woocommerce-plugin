@@ -18,6 +18,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Handles frontend floating button and iframe modal.
  */
 class Iframe {
+	private const USER_CART_TOKEN_COOKIE = 'aicommerce_user_cart_token';
+
 
 	/**
 	 * Constructor.
@@ -76,10 +78,14 @@ class Iframe {
 		/** Use customer ID for authenticated users. */
 		if ( is_user_logged_in() ) {
 			/** Authenticated users do not need a guest token. */
-			$params['c'] = (string) get_current_user_id();
+			$params['c']       = (string) get_current_user_id();
+			$params['user_id'] = (string) get_current_user_id();
+			$params['cart_token'] = $this->get_user_cart_token();
+			$params['t']          = $params['cart_token'];
 		} elseif ( ! empty( $guest_token ) ) {
 			/** Use guest token only for guest visitors. */
-			$params['g'] = $guest_token;
+			$params['g']           = $guest_token;
+			$params['guest_token'] = $guest_token;
 		}
 
 		/** Return an empty string when no usable parameters exist. */
@@ -89,6 +95,71 @@ class Iframe {
 
 		/** Build the final iframe URL with query string. */
 		return $base_url . '?' . http_build_query( $params );
+	}
+
+	/**
+	 * Return a browser-scoped cart token for the logged-in user.
+	 *
+	 * @return string
+	 */
+	private function get_user_cart_token(): string {
+		if ( ! is_user_logged_in() ) {
+			return '';
+		}
+
+		$user_id = (int) get_current_user_id();
+		$token   = isset( $_COOKIE[ self::USER_CART_TOKEN_COOKIE ] )
+			? sanitize_text_field( wp_unslash( $_COOKIE[ self::USER_CART_TOKEN_COOKIE ] ) )
+			: '';
+
+		if ( $this->is_valid_user_cart_token( $token, $user_id ) ) {
+			return $token;
+		}
+
+		$token = wp_generate_password( 48, false, false );
+		set_transient( $this->get_user_cart_token_key( $token ), $user_id, DAY_IN_SECONDS );
+
+		$options = array(
+			'expires'  => time() + DAY_IN_SECONDS,
+			'path'     => '/',
+			'secure'   => is_ssl(),
+			'httponly' => true,
+			'samesite' => 'Lax',
+		);
+
+		if ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) {
+			$options['domain'] = COOKIE_DOMAIN;
+		}
+
+		setcookie( self::USER_CART_TOKEN_COOKIE, $token, $options );
+		$_COOKIE[ self::USER_CART_TOKEN_COOKIE ] = $token;
+
+		return $token;
+	}
+
+	/**
+	 * Validate a browser-scoped cart token.
+	 *
+	 * @param string $token   Cart token.
+	 * @param int    $user_id User ID.
+	 * @return bool
+	 */
+	private function is_valid_user_cart_token( string $token, int $user_id ): bool {
+		if ( '' === $token || $user_id <= 0 ) {
+			return false;
+		}
+
+		return $user_id === (int) get_transient( $this->get_user_cart_token_key( $token ) );
+	}
+
+	/**
+	 * Build transient key for a cart token.
+	 *
+	 * @param string $token Cart token.
+	 * @return string
+	 */
+	private function get_user_cart_token_key( string $token ): string {
+		return 'aicommerce_user_cart_token_' . hash( 'sha256', $token );
 	}
 
 	/**
@@ -130,12 +201,10 @@ class Iframe {
 			return;
 		}
 
-		$suffix = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? '' : '.min';
-
 		/** Enqueue iframe frontend stylesheet. */
 		wp_enqueue_style(
 			'aicommerce-iframe',
-			AICOMMERCE_PLUGIN_URL . 'assets/css/iframe' . $suffix . '.css',
+			AICOMMERCE_PLUGIN_URL . 'assets/css/iframe.css',
 			array(),
 			AICOMMERCE_VERSION
 		);
@@ -143,7 +212,7 @@ class Iframe {
 		/** Enqueue iframe frontend script. */
 		wp_enqueue_script(
 			'aicommerce-iframe',
-			AICOMMERCE_PLUGIN_URL . 'assets/js/iframe' . $suffix . '.js',
+			AICOMMERCE_PLUGIN_URL . 'assets/js/iframe.js',
 			array( 'aicommerce-guest-token' ),
 			AICOMMERCE_VERSION,
 			true
@@ -170,6 +239,11 @@ class Iframe {
 
 				/** Fully generated iframe URL. */
 				'url'      => $this->get_iframe_url(),
+
+				/** Current authenticated customer identity, when available. */
+				'logged_in' => is_user_logged_in(),
+				'user_id'   => is_user_logged_in() ? (int) get_current_user_id() : 0,
+				'cart_token' => is_user_logged_in() ? $this->get_user_cart_token() : '',
 			)
 		);
 	}

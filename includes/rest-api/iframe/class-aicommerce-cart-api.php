@@ -29,6 +29,22 @@ class CartAPI {
     }
 
     /**
+     * Build a normalized cart identity payload for API responses.
+     *
+     * @param string   $guest_token Guest token.
+     * @param int|null $user_id     User ID.
+     * @return array<string, mixed>
+     */
+    private function build_identity_payload( string $guest_token = '', ?int $user_id = null ): array {
+        return array(
+            'identifier'  => ! empty( $guest_token ) ? 'guest' : 'user',
+            'guest_token' => ! empty( $guest_token ) ? $guest_token : '',
+            'storage_key' => ! empty( $guest_token ) ? CartStorage::get_guest_cart_option_name( $guest_token ) : '',
+            'user_id'     => ! empty( $user_id ) ? (int) $user_id : 0,
+        );
+    }
+
+    /**
      * Constructor
      */
     public function __construct() {
@@ -86,6 +102,200 @@ class CartAPI {
     }
 
     /**
+     * Resolve request identity consistently across cart endpoints.
+     *
+     * Browser-originated requests may omit the explicit identifier even though
+     * the current WooCommerce page still has the guest cookie or logged-in user.
+     *
+     * @param \WP_REST_Request $request REST request.
+     * @param bool             $allow_session_fallback Whether to fall back to the current browser session.
+     * @return array{guest_token:string,user_id:?int,error:\WP_REST_Response|null}
+     */
+    private function resolve_cart_identity( \WP_REST_Request $request, bool $allow_session_fallback = true, bool $require_user_cart_session = true ): array {
+        $raw_guest_token = $request->get_param( 'guest_token' );
+        $raw_user_id     = $request->get_param( 'user_id' );
+        $raw_cart_token  = $request->get_param( 'cart_token' );
+        if ( empty( $raw_cart_token ) ) {
+            $raw_cart_token = $request->get_param( 't' );
+        }
+
+        $has_guest_token = is_string( $raw_guest_token ) && '' !== trim( $raw_guest_token );
+        $has_user_id     = isset( $raw_user_id ) && '' !== $raw_user_id && null !== $raw_user_id;
+
+        if ( $allow_session_fallback && is_user_logged_in() && $has_guest_token && ! $has_user_id ) {
+            $raw_guest_token = '';
+            $raw_user_id     = get_current_user_id();
+            $has_guest_token = false;
+            $has_user_id     = true;
+        }
+
+        if ( $has_guest_token && $has_user_id ) {
+            return array(
+                'guest_token' => '',
+                'user_id'     => null,
+                'error'       => new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'conflicting_identifiers',
+                        'message' => __( 'Provide either guest_token or user_id, not both.', 'aicommerce' ),
+                    ),
+                    400
+                ),
+            );
+        }
+
+        $context     = CartContextResolver::resolve_request_context( $raw_guest_token, $raw_user_id, $allow_session_fallback );
+        $guest_token = (string) $context['guest_token'];
+        $user_id     = $context['user_id'];
+
+        if ( $has_guest_token && empty( $guest_token ) ) {
+            return array(
+                'guest_token' => '',
+                'user_id'     => null,
+                'error'       => new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'invalid_guest_token',
+                        'message' => __( 'Invalid guest token format.', 'aicommerce' ),
+                    ),
+                    400
+                ),
+            );
+        }
+
+        if ( $has_user_id && empty( $user_id ) ) {
+            return array(
+                'guest_token' => '',
+                'user_id'     => null,
+                'error'       => new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'invalid_user_id',
+                        'message' => __( 'Invalid user ID.', 'aicommerce' ),
+                    ),
+                    400
+                ),
+            );
+        }
+
+        if ( $require_user_cart_session && $has_user_id && ! $this->can_use_user_cart_identity( (int) $user_id, (string) $raw_cart_token ) ) {
+            return array(
+                'guest_token' => '',
+                'user_id'     => null,
+                'error'       => new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'invalid_user_cart_session',
+                        'message' => __( 'Invalid user cart session.', 'aicommerce' ),
+                    ),
+                    403
+                ),
+            );
+        }
+
+        if ( empty( $guest_token ) && empty( $user_id ) ) {
+            $current_context = $allow_session_fallback ? CartContextResolver::resolve_current_context() : array( 'guest_token' => '', 'user_id' => 0 );
+            $guest_token     = (string) $current_context['guest_token'];
+            $user_id         = ! empty( $current_context['user_id'] ) ? (int) $current_context['user_id'] : null;
+        }
+
+        if ( empty( $guest_token ) && empty( $user_id ) ) {
+            return array(
+                'guest_token' => '',
+                'user_id'     => null,
+                'error'       => new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'missing_identifier',
+                        'message' => __( 'Either guest_token or user_id is required.', 'aicommerce' ),
+                    ),
+                    400
+                ),
+            );
+        }
+
+        if ( ! empty( $user_id ) && ! get_user_by( 'id', $user_id ) ) {
+            return array(
+                'guest_token' => '',
+                'user_id'     => null,
+                'error'       => new \WP_REST_Response(
+                    array(
+                        'success' => false,
+                        'code'    => 'invalid_user_id',
+                        'message' => __( 'Invalid user ID.', 'aicommerce' ),
+                    ),
+                    400
+                ),
+            );
+        }
+
+        return array(
+            'guest_token' => $guest_token,
+            'user_id'     => $user_id,
+            'error'       => null,
+        );
+    }
+
+    /**
+     * Check whether the current request may operate on a user cart.
+     *
+     * @param int    $user_id    User ID.
+     * @param string $cart_token Browser-scoped cart token.
+     * @return bool
+     */
+    private function can_use_user_cart_identity( int $user_id, string $cart_token = '' ): bool {
+        if ( $user_id <= 0 ) {
+            return false;
+        }
+
+        if ( is_user_logged_in() && (int) get_current_user_id() === $user_id ) {
+            return true;
+        }
+
+        if ( '' === $cart_token ) {
+            return false;
+        }
+
+        $token_user_id = (int) get_transient( 'aicommerce_user_cart_token_' . hash( 'sha256', $cart_token ) );
+
+        return $token_user_id === $user_id;
+    }
+
+    /**
+     * Check whether this guest token was just consumed by a login merge.
+     *
+     * @param string $guest_token Guest token.
+     * @return bool
+     */
+    private function is_guest_token_claimed_after_login( string $guest_token ): bool {
+        if ( empty( $guest_token ) || ! function_exists( 'get_transient' ) ) {
+            return false;
+        }
+
+        return (bool) get_transient( 'aicommerce_guest_login_user_' . md5( $guest_token ) );
+    }
+
+    /**
+     * Check whether a guest cart has a persisted AICommerce storage row.
+     *
+     * Missing guest storage usually means an old cached token or a fresh empty
+     * token. Sync must not project that absence over the current Woo cart.
+     *
+     * @param string $guest_token Guest token.
+     * @return bool
+     */
+    private function guest_cart_storage_exists( string $guest_token ): bool {
+        if ( empty( $guest_token ) ) {
+            return false;
+        }
+
+        $sentinel = '__aicommerce_missing_guest_cart__';
+        $value    = get_option( CartStorage::get_guest_cart_option_name( $guest_token ), $sentinel );
+
+        return $value !== $sentinel;
+    }
+
+    /**
      * Register REST API routes
      */
     public function register_routes(): void {
@@ -99,6 +309,36 @@ class CartAPI {
                 'methods'             => 'POST',
                 'callback'            => array( $this, 'add_to_cart' ),
                 'permission_callback' => '__return_true',
+                'args'                => array(
+                    'guest_token'    => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                    'user_id'        => array(
+                        'type'     => 'integer',
+                        'required' => false,
+                    ),
+                    'cart_token'     => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                    'product_id'     => array(
+                        'description' => __( 'Product ID to add', 'aicommerce' ),
+                        'type'        => 'integer',
+                        'required'    => true,
+                        'minimum'     => 1,
+                    ),
+                    'quantity'       => array(
+                        'type'     => 'integer',
+                        'required' => false,
+                        'minimum'  => 1,
+                    ),
+                    'variation_data' => array(
+                        'description' => __( 'Variation data for variable products (must include variation_id)', 'aicommerce' ),
+                        'type'        => 'object',
+                        'required'    => false,
+                    ),
+                ),
             )
         );
 
@@ -110,6 +350,12 @@ class CartAPI {
                 'methods'             => 'GET',
                 'callback'            => array( $this, 'get_cart' ),
                 'permission_callback' => '__return_true',
+                'args'                => array(
+                    'guest_token' => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                ),
             )
         );
 
@@ -121,10 +367,24 @@ class CartAPI {
                 'methods'             => 'POST',
                 'callback'            => array( $this, 'sync_to_wc_session' ),
                 'permission_callback' => '__return_true',
+                'args'                => array(
+                    'guest_token' => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                    'user_id'     => array(
+                        'type'     => 'integer',
+                        'required' => false,
+                    ),
+                    'cart_token'  => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                ),
             )
         );
 
-        // Cart hash endpoint (lightweight, for polling)
+        // Cart hash endpoint (lightweight read-only cart metadata)
         register_rest_route(
             $namespace,
             '/cart/hash',
@@ -134,6 +394,14 @@ class CartAPI {
                 'permission_callback' => '__return_true',
                 'args'                => array(
                     'guest_token' => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                    'user_id'     => array(
+                        'type'     => 'integer',
+                        'required' => false,
+                    ),
+                    'cart_token'  => array(
                         'type'     => 'string',
                         'required' => false,
                     ),
@@ -150,6 +418,18 @@ class CartAPI {
                 'callback'            => array( $this, 'remove_from_cart' ),
                 'permission_callback' => '__return_true',
                 'args'                => array(
+                    'guest_token'    => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
+                    'user_id'        => array(
+                        'type'     => 'integer',
+                        'required' => false,
+                    ),
+                    'cart_token'     => array(
+                        'type'     => 'string',
+                        'required' => false,
+                    ),
                     'product_id'     => array(
                         'description' => __( 'Product ID to remove', 'aicommerce' ),
                         'type'        => 'integer',
@@ -171,6 +451,10 @@ class CartAPI {
      * Supports both guest_token and user_id
      */
     public function add_to_cart( \WP_REST_Request $request ): \WP_REST_Response {
+        if ( $this->is_rate_limited( 'cart_add', 30, 60 ) ) {
+            return $this->rate_limit_response();
+        }
+
         self::log_debug(
             'add_to_cart:request',
             array(
@@ -188,87 +472,22 @@ class CartAPI {
             return APIValidator::error_response( $validation );
         }
 
-        $guest_token = $request->get_param( 'guest_token' );
-        $user_id = $request->get_param( 'user_id' );
+        $identity = $this->resolve_cart_identity( $request, true, false );
+        if ( $identity['error'] instanceof \WP_REST_Response ) {
+            self::log_debug(
+                'add_to_cart:identity_error',
+                array(
+                    'code' => $identity['error']->get_data()['code'] ?? 'identity_error',
+                )
+            );
+            return $identity['error'];
+        }
+
+        $guest_token = $identity['guest_token'];
+        $user_id     = $identity['user_id'];
         $product_id = $request->get_param( 'product_id' );
         $quantity = $request->get_param( 'quantity' );
         $variation_data = $request->get_param( 'variation_data' );
-
-        // Normalize user_id - convert to int if provided
-        $user_id_int = null;
-        if ( ! empty( $user_id ) || ( isset( $user_id ) && $user_id !== '' && $user_id !== null ) ) {
-            $user_id_int = absint( $user_id );
-            if ( $user_id_int <= 0 ) {
-                $user_id_int = null;
-            }
-        }
-
-        // Validate that either guest_token or user_id is provided
-        if ( empty( $guest_token ) && empty( $user_id_int ) ) {
-            self::log_debug( 'add_to_cart:missing_identifier' );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'missing_identifier',
-                    'message' => __( 'Either guest_token or user_id is required.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        // Validate that both are not provided
-        if ( ! empty( $guest_token ) && ! empty( $user_id_int ) ) {
-            self::log_debug( 'add_to_cart:conflicting_identifiers' );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'conflicting_identifiers',
-                    'message' => __( 'Provide either guest_token or user_id, not both.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        // Validate guest token format if provided
-        if ( ! empty( $guest_token ) && ! $this->validate_guest_token( $guest_token ) ) {
-            self::log_debug(
-                'add_to_cart:invalid_guest_token',
-                array(
-                    'guest_token' => $guest_token,
-                )
-            );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'invalid_guest_token',
-                    'message' => __( 'Invalid guest token format.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        // Validate user_id if provided
-        if ( ! empty( $user_id_int ) ) {
-            if ( ! get_user_by( 'id', $user_id_int ) ) {
-                self::log_debug(
-                    'add_to_cart:invalid_user_id',
-                    array(
-                        'user_id' => $user_id_int,
-                    )
-                );
-                return new \WP_REST_Response(
-                    array(
-                        'success' => false,
-                        'code'    => 'invalid_user_id',
-                        'message' => __( 'Invalid user ID.', 'aicommerce' ),
-                    ),
-                    400
-                );
-            }
-            $user_id = $user_id_int;
-        } else {
-            $user_id = null;
-        }
 
         // Validate product ID
         if ( empty( $product_id ) || ! is_numeric( $product_id ) ) {
@@ -285,6 +504,17 @@ class CartAPI {
 
         $product_id = absint( $product_id );
         $quantity = ! empty( $quantity ) ? absint( $quantity ) : 1;
+
+        if ( $quantity <= 0 ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'invalid_quantity',
+                    'message' => __( 'Quantity must be greater than zero.', 'aicommerce' ),
+                ),
+                400
+            );
+        }
 
         $product = wc_get_product( $product_id );
         if ( ! $product ) {
@@ -309,27 +539,31 @@ class CartAPI {
             $variation_data_array = $variation_data;
         }
 
-        // Variable products require variation_id in variation_data
-        if ( $product->is_type( 'variable' ) ) {
-            if ( empty( $variation_data_array['variation_id'] ) ) {
-                self::log_debug(
-                    'add_to_cart:variation_required',
-                    array(
-                        'product_id' => $product_id,
-                    )
-                );
-                return new \WP_REST_Response(
-                    array(
-                        'success' => false,
-                        'code'    => 'variation_required',
-                        'message' => __( 'Variable products require variation_data.variation_id.', 'aicommerce' ),
-                    ),
-                    400
-                );
-            }
-        }
-
         $variation_data_array = self::normalize_variation_data_for_wc( $product_id, $variation_data_array );
+        $existing_quantity    = $this->get_existing_line_quantity(
+            ! empty( $guest_token ) ? (string) $guest_token : '',
+            ! empty( $user_id ) ? (int) $user_id : null,
+            $product_id,
+            $variation_data_array
+        );
+        $availability_result  = ProductAvailability::validate_product_for_cart(
+            $product,
+            $variation_data_array,
+            $quantity,
+            $existing_quantity
+        );
+
+        if ( empty( $availability_result['valid'] ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'success'      => false,
+                    'code'         => $availability_result['code'],
+                    'message'      => $availability_result['message'],
+                    'availability' => $availability_result['availability'],
+                ),
+                409
+            );
+        }
 
         /**
          * Idempotency / duplicate protection:
@@ -354,8 +588,9 @@ class CartAPI {
 
                 return new \WP_REST_Response(
                     array(
-                        'success' => true,
-                        'message' => __( 'Duplicate add ignored.', 'aicommerce' ),
+                        'success'    => true,
+                        'code'       => 'duplicate_request',
+                        'message'    => __( 'Duplicate add ignored.', 'aicommerce' ),
                         'cart_count' => $cart_count,
                     ),
                     200
@@ -446,11 +681,19 @@ class CartAPI {
             )
         );
 
+        /** Trigger Woo sync immediately after a successful REST cart mutation. */
+        $this->trigger_wc_bridge_sync(
+            ! empty( $guest_token ) ? (string) $guest_token : '',
+            ! empty( $user_id ) ? (int) $user_id : null
+        );
+
         return new \WP_REST_Response(
             array(
-                'success'    => true,
-                'message'    => __( 'Item added to cart successfully.', 'aicommerce' ),
-                'cart_count' => $cart_count,
+                'success'      => true,
+                'message'      => __( 'Item added to cart successfully.', 'aicommerce' ),
+                'cart_count'   => $cart_count,
+                'availability' => $availability_result['availability'],
+                'cart_event'   => 'aicommerce:cart_added',
             ),
             200
         );
@@ -475,59 +718,26 @@ class CartAPI {
             return APIValidator::error_response( $validation );
         }
 
-        $guest_token = $request->get_param( 'guest_token' );
-        $user_id = $request->get_param( 'user_id' );
-
-        if ( empty( $guest_token ) && empty( $user_id ) ) {
-            self::log_debug( 'get_cart:missing_identifier' );
-            return new \WP_REST_Response(
+        $identity = $this->resolve_cart_identity( $request, true, false );
+        if ( $identity['error'] instanceof \WP_REST_Response ) {
+            self::log_debug(
+                'get_cart:identity_error',
                 array(
-                    'success' => false,
-                    'code'    => 'missing_identifier',
-                    'message' => __( 'Either guest_token or user_id is required.', 'aicommerce' ),
-                ),
-                400
+                    'code' => $identity['error']->get_data()['code'] ?? 'identity_error',
+                )
             );
+            return $identity['error'];
         }
 
-        if ( ! empty( $guest_token ) && ! empty( $user_id ) ) {
-            self::log_debug( 'get_cart:conflicting_identifiers' );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'conflicting_identifiers',
-                    'message' => __( 'Provide either guest_token or user_id, not both.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        if ( ! empty( $user_id ) ) {
-            $user_id = absint( $user_id );
-            if ( $user_id <= 0 || ! get_user_by( 'id', $user_id ) ) {
-                self::log_debug(
-                    'get_cart:invalid_user_id',
-                    array(
-                        'user_id' => $user_id,
-                    )
-                );
-                return new \WP_REST_Response(
-                    array(
-                        'success' => false,
-                        'code'    => 'invalid_user_id',
-                        'message' => __( 'Invalid user ID.', 'aicommerce' ),
-                    ),
-                    400
-                );
-            }
-        }
+        $guest_token = $identity['guest_token'];
+        $user_id     = $identity['user_id'];
 
         if ( ! empty( $guest_token ) ) {
-            $cart       = CartStorage::get_cart( $guest_token );
-            $cart_count = CartStorage::get_cart_count( $guest_token );
+            $cart = $this->prune_invalid_cart_storage( $guest_token, null );
+            $cart_count = count( $cart );
         } elseif ( ! empty( $user_id ) ) {
-            $cart       = CartStorage::get_user_cart( $user_id );
-            $cart_count = CartStorage::get_user_cart_count( $user_id );
+            $cart = $this->prune_invalid_cart_storage( '', (int) $user_id );
+            $cart_count = count( $cart );
         } else {
             self::log_debug( 'get_cart:missing_identifier_after_normalize' );
             return new \WP_REST_Response(
@@ -544,15 +754,17 @@ class CartAPI {
         self::log_debug(
             'get_cart:success',
             array(
-                'identifier' => ! empty( $guest_token ) ? 'guest' : 'user',
-                'cart_count' => $cart_count,
-                'items'      => count( $cart ),
+                'identifier'  => ! empty( $guest_token ) ? 'guest' : 'user',
+                'storage_key' => ! empty( $guest_token ) ? CartStorage::get_guest_cart_option_name( $guest_token ) : '',
+                'cart_count'  => $cart_count,
+                'items'       => count( $cart ),
             )
         );
 
         return new \WP_REST_Response(
             array(
                 'success'    => true,
+                'identity'   => $this->build_identity_payload( $guest_token, $user_id ),
                 'cart'       => $cart,
                 'cart_count' => $cart_count,
             ),
@@ -577,6 +789,9 @@ class CartAPI {
 
             if ( $product_id <= 0 ) {
                 $item['product_details'] = null;
+                $item['line_status']     = 'invalid';
+                $item['requires_action'] = true;
+                $item['availability']    = null;
                 continue;
             }
 
@@ -586,6 +801,9 @@ class CartAPI {
 
             if ( ! $parent_product ) {
                 $item['product_details'] = null;
+                $item['line_status']     = 'product_missing';
+                $item['requires_action'] = true;
+                $item['availability']    = null;
                 continue;
             }
 
@@ -603,6 +821,19 @@ class CartAPI {
                 'image' => $image_url ?: null,
                 'url'   => get_permalink( $product_id ) ?: null,
             );
+
+            $quantity              = isset( $item['quantity'] ) ? max( 0, (int) $item['quantity'] ) : 0;
+            $existing_quantity     = max( 0, $quantity - 1 );
+            $availability_result   = ProductAvailability::validate_product_for_cart(
+                $parent_product,
+                isset( $item['variation_data'] ) && is_array( $item['variation_data'] ) ? $item['variation_data'] : array(),
+                1,
+                $existing_quantity
+            );
+            $item['availability']       = $availability_result['availability'];
+            $item['line_status']        = $this->map_validation_code_to_line_status( $availability_result['code'] );
+            $item['requires_action']    = 'valid' !== $item['line_status'];
+            $item['max_addable_quantity'] = (int) ( $availability_result['availability']['max_addable_quantity'] ?? 0 );
         }
         unset( $item );
 
@@ -610,10 +841,133 @@ class CartAPI {
     }
 
     /**
+     * Remove deleted or invalid items from the stored cart and persist the cleaned result.
+     *
+     * @param string   $guest_token Guest token.
+     * @param int|null $user_id     User ID.
+     * @return array<int, array<string, mixed>>
+     */
+    private function prune_invalid_cart_storage( string $guest_token = '', ?int $user_id = null ): array {
+        /** Load the current stored cart for the resolved identity. */
+        $items = ! empty( $guest_token )
+            ? CartStorage::get_cart( $guest_token )
+            : CartStorage::get_user_cart( (int) $user_id );
+
+        /** Remove deleted products, invalid variations, and malformed lines. */
+        $sanitized = CartProjector::sanitize_storage_items( $items );
+        if ( ! $sanitized['changed'] ) {
+            return $sanitized['items'];
+        }
+
+        /** Persist the cleaned cart so later reads and syncs see the same reality. */
+        if ( ! empty( $guest_token ) ) {
+            CartStorage::save_cart( $guest_token, $sanitized['items'] );
+        } elseif ( ! empty( $user_id ) ) {
+            CartStorage::save_user_cart( (int) $user_id, $sanitized['items'] );
+        }
+
+        return $sanitized['items'];
+    }
+
+    /**
+     * Trigger an immediate WooCommerce bridge import after a successful REST mutation.
+     *
+     * @param string   $guest_token Guest token.
+     * @param int|null $user_id     User ID.
+     * @return array<string, mixed>
+     */
+    private function trigger_wc_bridge_sync( string $guest_token = '', ?int $user_id = null ): array {
+        if ( empty( $guest_token ) && empty( $user_id ) ) {
+            return array(
+                'success' => false,
+                'code'    => 'missing_identifier',
+            );
+        }
+
+        $result = WooCartBridge::import_storage_to_wc_cart( $guest_token, $user_id );
+        self::log_debug(
+            'trigger_wc_bridge_sync:result',
+            array(
+                'identifier'   => ! empty( $guest_token ) ? 'guest' : 'user',
+                'guest_token'  => ! empty( $guest_token ) ? $guest_token : '',
+                'user_id'      => ! empty( $user_id ) ? (int) $user_id : 0,
+                'success'      => ! empty( $result['success'] ),
+                'synced'       => ! empty( $result['synced'] ),
+                'synced_count' => (int) ( $result['synced_count'] ?? 0 ),
+                'total_items'  => (int) ( $result['total_items'] ?? 0 ),
+            )
+        );
+
+        return is_array( $result ) ? $result : array(
+            'success' => false,
+            'code'    => 'invalid_bridge_result',
+        );
+    }
+
+    /**
+     * Return existing quantity for the same logical line already present in cart storage.
+     *
+     * @param string   $guest_token    Guest token.
+     * @param int|null $user_id        User ID.
+     * @param int      $product_id     Product ID.
+     * @param array    $variation_data Variation payload.
+     * @return int
+     */
+    private function get_existing_line_quantity( string $guest_token = '', ?int $user_id = null, int $product_id = 0, array $variation_data = array() ): int {
+        if ( $product_id <= 0 ) {
+            return 0;
+        }
+
+        $items = ! empty( $guest_token )
+            ? CartStorage::get_cart( $guest_token )
+            : CartStorage::get_user_cart( (int) $user_id );
+
+        $variation_id = isset( $variation_data['variation_id'] ) ? (int) $variation_data['variation_id'] : 0;
+        foreach ( $items as $item ) {
+            if ( (int) ( $item['product_id'] ?? 0 ) !== $product_id ) {
+                continue;
+            }
+
+            $item_variation_id = isset( $item['variation_data']['variation_id'] ) ? (int) $item['variation_data']['variation_id'] : 0;
+            if ( $item_variation_id === $variation_id ) {
+                return max( 0, (int) ( $item['quantity'] ?? 0 ) );
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * Map product validation codes to per-line cart statuses.
+     *
+     * @param string $code Validation code.
+     * @return string
+     */
+    private function map_validation_code_to_line_status( string $code ): string {
+        $map = array(
+            'valid'                   => 'valid',
+            'product_unpublished'     => 'product_unpublished',
+            'product_not_purchasable' => 'product_not_purchasable',
+            'variation_invalid'       => 'variation_invalid',
+            'variation_mismatch'      => 'variation_invalid',
+            'variation_required'      => 'variation_invalid',
+            'out_of_stock'            => 'out_of_stock',
+            'insufficient_stock'      => 'insufficient_stock',
+            'sold_individually'       => 'insufficient_stock',
+        );
+
+        return isset( $map[ $code ] ) ? $map[ $code ] : 'invalid';
+    }
+
+    /**
      * Remove from cart endpoint
      * Supports both guest_token and user_id
      */
     public function remove_from_cart( \WP_REST_Request $request ): \WP_REST_Response {
+        if ( $this->is_rate_limited( 'cart_remove', 30, 60 ) ) {
+            return $this->rate_limit_response();
+        }
+
         self::log_debug(
             'remove_from_cart:request',
             array(
@@ -629,8 +983,19 @@ class CartAPI {
             return APIValidator::error_response( $validation );
         }
 
-        $guest_token    = $request->get_param( 'guest_token' );
-        $user_id_param  = $request->get_param( 'user_id' );
+        $identity = $this->resolve_cart_identity( $request, true, false );
+        if ( $identity['error'] instanceof \WP_REST_Response ) {
+            self::log_debug(
+                'remove_from_cart:identity_error',
+                array(
+                    'code' => $identity['error']->get_data()['code'] ?? 'identity_error',
+                )
+            );
+            return $identity['error'];
+        }
+
+        $guest_token    = $identity['guest_token'];
+        $user_id_int    = $identity['user_id'];
         $product_id     = absint( $request->get_param( 'product_id' ) );
         $variation_data = $request->get_param( 'variation_data' );
 
@@ -646,75 +1011,11 @@ class CartAPI {
             );
         }
 
-        $user_id_int = null;
-        if ( ! empty( $user_id_param ) || ( isset( $user_id_param ) && $user_id_param !== '' && $user_id_param !== null ) ) {
-            $user_id_int = absint( $user_id_param );
-            if ( $user_id_int <= 0 ) {
-                $user_id_int = null;
-            }
-        }
-
-        if ( empty( $guest_token ) && empty( $user_id_int ) ) {
-            self::log_debug( 'remove_from_cart:missing_identifier' );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'missing_identifier',
-                    'message' => __( 'Either guest_token or user_id is required.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        if ( ! empty( $guest_token ) && ! empty( $user_id_int ) ) {
-            self::log_debug( 'remove_from_cart:conflicting_identifiers' );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'conflicting_identifiers',
-                    'message' => __( 'Provide either guest_token or user_id, not both.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        if ( ! empty( $guest_token ) && ! $this->validate_guest_token( $guest_token ) ) {
-            self::log_debug(
-                'remove_from_cart:invalid_guest_token',
-                array(
-                    'guest_token' => $guest_token,
-                )
-            );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'invalid_guest_token',
-                    'message' => __( 'Invalid guest_token format.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        if ( ! empty( $user_id_int ) && ! get_user_by( 'id', $user_id_int ) ) {
-            self::log_debug(
-                'remove_from_cart:invalid_user_id',
-                array(
-                    'user_id' => $user_id_int,
-                )
-            );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'invalid_user_id',
-                    'message' => __( 'Invalid user ID.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
         $variation_data_array = is_array( $variation_data ) ? $variation_data : array();
 
         if ( ! empty( $guest_token ) ) {
+            /** Clean stale guest items first so remove runs against the current valid cart shape. */
+            $this->prune_invalid_cart_storage( $guest_token, null );
             $cart = CartStorage::remove_item( $guest_token, $product_id, $variation_data_array );
             if ( $cart === false ) {
                 self::log_debug(
@@ -737,23 +1038,34 @@ class CartAPI {
             self::log_debug(
                 'remove_from_cart:success',
                 array(
-                    'identifier' => 'guest',
-                    'product_id' => $product_id,
-                    'cart_count' => $cart_count,
+                    'identifier'  => 'guest',
+                    'guest_token' => $guest_token,
+                    'storage_key' => CartStorage::get_guest_cart_option_name( $guest_token ),
+                    'product_id'  => $product_id,
+                    'cart_count'  => $cart_count,
                 )
             );
+
+            /** Trigger Woo sync immediately after a successful REST cart mutation. */
+            $this->trigger_wc_bridge_sync( (string) $guest_token, null );
+
             return new \WP_REST_Response(
-                array(
-                    'success'    => true,
-                    'message'    => __( 'Item removed from cart.', 'aicommerce' ),
-                    'cart_count' => $cart_count,
-                ),
+	                array(
+	                    'success'    => true,
+		                    'message'    => __( 'Item removed from cart.', 'aicommerce' ),
+		                    'identity'   => $this->build_identity_payload( $guest_token, null ),
+		                    'cart_count' => $cart_count,
+		                    'cart_event' => 'aicommerce:cart_removed',
+		                ),
                 200
             );
         }
 
         $user_id      = $user_id_int;
         $variation_id = ! empty( $variation_data_array['variation_id'] ) ? absint( $variation_data_array['variation_id'] ) : 0;
+
+        /** Clean stale user items first so remove runs against the current valid cart shape. */
+        $this->prune_invalid_cart_storage( '', (int) $user_id );
 
         // 1. Remove from our user_meta cart (source of truth for the API)
         $cart = CartStorage::remove_item_from_user_cart( $user_id, $product_id, $variation_data_array );
@@ -790,12 +1102,17 @@ class CartAPI {
             )
         );
 
+        /** Trigger Woo sync immediately after a successful REST cart mutation. */
+        $this->trigger_wc_bridge_sync( '', (int) $user_id );
+
         return new \WP_REST_Response(
-            array(
-                'success'    => true,
-                'message'    => __( 'Item removed from cart.', 'aicommerce' ),
-                'cart_count' => $cart_count,
-            ),
+	            array(
+	                'success'    => true,
+		                'message'    => __( 'Item removed from cart.', 'aicommerce' ),
+		                'identity'   => $this->build_identity_payload( '', $user_id ),
+		                'cart_count' => $cart_count,
+		                'cart_event' => 'aicommerce:cart_removed',
+		            ),
             200
         );
     }
@@ -807,157 +1124,115 @@ class CartAPI {
      * and returns the applied cart version so the frontend can stay version-driven.
      */
     public function sync_to_wc_session( \WP_REST_Request $request ): \WP_REST_Response {
+        if ( $this->is_rate_limited( 'cart_sync', 60, 60 ) ) {
+            return $this->rate_limit_response();
+        }
+
+        /** Log the incoming sync request so version-related flows are easier to trace. */
         self::log_debug(
             'sync_to_wc_session:request',
             array(
                 'guest_token_present' => ! empty( $request->get_param( 'guest_token' ) ),
                 'user_id'             => $request->get_param( 'user_id' ),
                 'logged_in'           => is_user_logged_in(),
+                'nonce_present'       => ! empty( $request->get_header( 'x_wp_nonce' ) ),
+                'cart_token_present'  => ! empty( $request->get_param( 'cart_token' ) ) || ! empty( $request->get_param( 't' ) ),
             )
         );
 
-        $guest_token = sanitize_text_field( (string) $request->get_param( 'guest_token' ) );
-        $user_id     = $this->resolve_sync_user_id( $request->get_param( 'user_id' ), $guest_token );
-
-        if ( empty( $guest_token ) && empty( $user_id ) ) {
-            self::log_debug( 'sync_to_wc_session:missing_identifier' );
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'missing_identifier',
-                    'message' => __( 'Either guest_token or user_id is required.', 'aicommerce' ),
-                ),
-                400
-            );
-        }
-
-        if ( ! empty( $user_id ) && ! get_user_by( 'id', $user_id ) ) {
+        /** Resolve the cart identity from request payload, cookie, or authenticated session. */
+        $identity = $this->resolve_cart_identity( $request, true );
+        if ( $identity['error'] instanceof \WP_REST_Response ) {
             self::log_debug(
-                'sync_to_wc_session:invalid_user_id',
+                'sync_to_wc_session:identity_error',
                 array(
-                    'user_id' => $user_id,
+                    'code' => $identity['error']->get_data()['code'] ?? 'identity_error',
                 )
             );
-            return new \WP_REST_Response(
+            return $identity['error'];
+        }
+
+        $guest_token = $identity['guest_token'];
+        $user_id     = $identity['user_id'];
+
+        if ( ! empty( $guest_token ) && empty( $user_id ) && $this->is_guest_token_claimed_after_login( $guest_token ) ) {
+            self::log_debug(
+                'sync_to_wc_session:claimed_guest_skipped',
                 array(
-                    'success' => false,
-                    'code'    => 'invalid_user_id',
-                    'message' => __( 'Invalid user ID.', 'aicommerce' ),
-                ),
-                400
+                    'guest_token' => $guest_token,
+                    'storage_key' => CartStorage::get_guest_cart_option_name( $guest_token ),
+                )
             );
-        }
-
-        $lock_key = ! empty( $guest_token )
-            ? 'aicommerce_wc_sync_lock_guest_' . md5( $guest_token )
-            : 'aicommerce_wc_sync_lock_user_' . (int) $user_id;
-
-        if ( function_exists( 'get_transient' ) && function_exists( 'set_transient' ) ) {
-            if ( (bool) get_transient( $lock_key ) ) {
-                self::log_debug(
-                    'sync_to_wc_session:skipped_lock',
-                    array(
-                        'lock_key' => $lock_key,
-                    )
-                );
-                return new \WP_REST_Response(
-                    array(
-                        'success' => true,
-                        'message' => __( 'Cart sync skipped (concurrent sync in progress).', 'aicommerce' ),
-                        'synced'  => false,
-                        'version' => $this->get_cart_version( $guest_token, $user_id ),
-                    ),
-                    200
-                );
-            }
-
-            set_transient( $lock_key, 1, 6 );
-        }
-
-        $persistent_cart = ! empty( $guest_token )
-            ? CartStorage::get_cart( $guest_token )
-            : CartStorage::get_user_cart( (int) $user_id );
-
-        if ( WC()->session ) {
-            $stored_version = $this->get_cart_version( $guest_token, $user_id );
-            $session_key    = ! empty( $guest_token )
-                ? 'aicommerce_guest_cart_version_' . md5( $guest_token )
-                : 'aicommerce_user_cart_version';
-            $last_applied   = (int) WC()->session->get( $session_key, 0 );
-
-            if ( $stored_version > 0 && $stored_version === $last_applied ) {
-                return new \WP_REST_Response(
-                    array(
-                        'success'      => true,
-                        'message'      => __( 'Cart is already in sync.', 'aicommerce' ),
-                        'synced'       => false,
-                        'synced_count' => 0,
-                        'total_items'  => count( $persistent_cart ),
-                        'errors'       => array(),
-                        'version'      => $stored_version,
-                    ),
-                    200
-                );
-            }
-        }
-
-        $cart = $this->get_wc_cart_for_sync();
-        if ( ! $cart ) {
-            return new \WP_REST_Response(
-                array(
-                    'success' => false,
-                    'code'    => 'woocommerce_not_available',
-                    'message' => __( 'WooCommerce cart is not available.', 'aicommerce' ),
-                ),
-                500
-            );
-        }
-
-        if ( empty( $persistent_cart ) ) {
-            if ( ! empty( $cart->get_cart() ) ) {
-                $cart->empty_cart();
-                $cart->calculate_totals();
-
-                if ( WC()->session ) {
-                    WC()->session->set( 'cart', $cart->get_cart_for_session() );
-                }
-            }
 
             return new \WP_REST_Response(
                 array(
-                    'success' => true,
-                    'message' => __( 'Cart is already empty.', 'aicommerce' ),
-                    'synced'  => false,
-                    'version' => 0,
+                    'success'      => true,
+                    'message'      => __( 'Guest cart was claimed by login; anonymous sync skipped.', 'aicommerce' ),
+                    'identity'     => $this->build_identity_payload( $guest_token, null ),
+                    'synced'       => false,
+                    'synced_count' => 0,
+                    'total_items'  => 0,
+                    'errors'       => array(),
+                    'version'      => 0,
+                    'code'         => 'claimed_guest_after_login',
                 ),
                 200
             );
         }
 
-        $result       = CartReconciler::replace_wc_cart_with_persistent( $persistent_cart, $cart );
-        $synced_count = (int) $result['synced_count'];
+        if ( ! empty( $guest_token ) && empty( $user_id ) && ! $this->guest_cart_storage_exists( $guest_token ) ) {
+            self::log_debug(
+                'sync_to_wc_session:missing_guest_storage_skipped',
+                array(
+                    'guest_token' => $guest_token,
+                    'storage_key' => CartStorage::get_guest_cart_option_name( $guest_token ),
+                )
+            );
+
+            return new \WP_REST_Response(
+                array(
+                    'success'      => true,
+                    'message'      => __( 'Guest cart storage is missing; sync skipped.', 'aicommerce' ),
+                    'identity'     => $this->build_identity_payload( $guest_token, null ),
+                    'synced'       => false,
+                    'synced_count' => 0,
+                    'total_items'  => 0,
+                    'errors'       => array(),
+                    'version'      => 0,
+                    'code'         => 'missing_guest_storage',
+                ),
+                200
+            );
+        }
+
+        /** Run one explicit bridge import instead of continuous session sync logic. */
+        $result = WooCartBridge::import_storage_to_wc_cart( $guest_token, $user_id );
+
+        if ( empty( $result['success'] ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => $result['code'] ?? 'woocommerce_not_available',
+                    'message' => $result['message'] ?? __( 'WooCommerce cart is not available.', 'aicommerce' ),
+                ),
+                500
+            );
+        }
+
+        $synced_count = (int) ( $result['synced_count'] ?? 0 );
         $errors       = isset( $result['errors'] ) && is_array( $result['errors'] ) ? $result['errors'] : array();
-
-        $cart->calculate_totals();
-
-        if ( ! empty( $user_id ) ) {
-            CartStorage::save_user_cart( (int) $user_id, CartReconciler::persistent_items_from_wc_cart( $cart ) );
-        }
-
-        if ( WC()->session ) {
-            WC()->session->set( 'cart', $cart->get_cart_for_session() );
-        }
-
-        $this->set_wc_session_synced_version( $guest_token, $user_id );
+        $total_items  = (int) ( $result['total_items'] ?? 0 );
+        $version      = (int) ( $result['version'] ?? 0 );
 
         self::log_debug(
             'sync_to_wc_session:success',
             array(
                 'identifier'   => ! empty( $guest_token ) ? 'guest' : 'user',
                 'guest_token'  => ! empty( $guest_token ) ? $guest_token : '',
+                'storage_key'  => ! empty( $guest_token ) ? CartStorage::get_guest_cart_option_name( $guest_token ) : '',
                 'user_id'      => ! empty( $user_id ) ? (int) $user_id : 0,
                 'synced_count' => $synced_count,
-                'total_items'  => count( $persistent_cart ),
+                'total_items'  => $total_items,
                 'errors_count' => count( $errors ),
                 'errors'       => array_slice( $errors, 0, 3 ),
             )
@@ -966,193 +1241,16 @@ class CartAPI {
         return new \WP_REST_Response(
             array(
                 'success'      => true,
-                'message'      => sprintf(
-                    __( 'Synced %d items to cart.', 'aicommerce' ),
-                    $synced_count
-                ),
+                'message'      => __( 'Cart synchronized to WooCommerce session.', 'aicommerce' ),
+                'identity'     => $this->build_identity_payload( $guest_token, $user_id ),
+                'synced'       => ! empty( $result['synced'] ),
                 'synced_count' => $synced_count,
-                'total_items'  => count( $persistent_cart ),
+                'total_items'  => $total_items,
                 'errors'       => $errors,
-                'version'      => $this->get_cart_version( $guest_token, $user_id ),
+                'version'      => $version,
             ),
             200
         );
-    }
-
-    /**
-     * Resolve the user ID for a sync request.
-     *
-     * Logged-in users may omit `user_id`; in that case we resolve it from the
-     * current authenticated WordPress session.
-     *
-     * @param mixed  $raw_user_id Raw request value.
-     * @param string $guest_token Guest token.
-     * @return int|null
-     */
-    private function resolve_sync_user_id( $raw_user_id, string $guest_token ): ?int {
-        $user_id = null;
-
-        if ( ! empty( $raw_user_id ) || ( isset( $raw_user_id ) && $raw_user_id !== '' && $raw_user_id !== null ) ) {
-            $user_id = absint( $raw_user_id );
-            if ( $user_id <= 0 ) {
-                $user_id = null;
-            }
-        }
-
-        if ( empty( $guest_token ) && empty( $user_id ) && is_user_logged_in() ) {
-            $user_id = get_current_user_id();
-        }
-
-        return $user_id ?: null;
-    }
-
-    /**
-     * Read the current persistent cart version for the given identity.
-     *
-     * @param string   $guest_token Guest token.
-     * @param int|null $user_id     User ID.
-     * @return int
-     */
-    private function get_cart_version( string $guest_token = '', ?int $user_id = null ): int {
-        if ( ! empty( $guest_token ) ) {
-            $meta = CartStorage::get_cart_meta( $guest_token );
-            return (int) ( $meta['version'] ?? 0 );
-        }
-
-        if ( ! empty( $user_id ) ) {
-            $meta = CartStorage::get_user_cart_meta( (int) $user_id );
-            return (int) ( $meta['version'] ?? 0 );
-        }
-
-        return 0;
-    }
-
-    /**
-     * Mark the current persistent cart version as already applied in WC session.
-     *
-     * @param string   $guest_token Guest token.
-     * @param int|null $user_id     User ID.
-     * @return void
-     */
-    private function set_wc_session_synced_version( string $guest_token = '', ?int $user_id = null ): void {
-        if ( ! function_exists( 'WC' ) || ! WC() || ! WC()->session ) {
-            return;
-        }
-
-        $version = $this->get_cart_version( $guest_token, $user_id );
-        if ( $version <= 0 ) {
-            return;
-        }
-
-        if ( ! empty( $guest_token ) ) {
-            WC()->session->set( 'aicommerce_guest_cart_version_' . md5( $guest_token ), $version );
-            return;
-        }
-
-        if ( ! empty( $user_id ) ) {
-            WC()->session->set( 'aicommerce_user_cart_version', $version );
-        }
-    }
-
-    /**
-     * Ensure WooCommerce cart is initialized and return it.
-     *
-     * @return \WC_Cart|null
-     */
-    private function get_wc_cart_for_sync(): ?\WC_Cart {
-        if ( ! class_exists( 'WooCommerce' ) ) {
-            self::log_debug( 'sync_to_wc_session:woocommerce_missing' );
-            return null;
-        }
-
-        if ( ! function_exists( 'WC' ) ) {
-            self::log_debug( 'sync_to_wc_session:wc_function_missing' );
-            return null;
-        }
-
-        if ( ! did_action( 'woocommerce_load_cart_from_session' ) ) {
-            if ( function_exists( 'wc_load_cart' ) ) {
-                wc_load_cart();
-            } else {
-                $wc = WC();
-                if ( ! $wc || ! isset( $wc->cart ) ) {
-                    if ( ! WC()->session ) {
-                        WC()->session = new \WC_Session_Handler();
-                        WC()->session->init();
-                    }
-                }
-            }
-        }
-
-        $cart = WC()->cart;
-        if ( ! $cart || ! is_a( $cart, 'WC_Cart' ) ) {
-            self::log_debug(
-                'sync_to_wc_session:wc_cart_missing',
-                array(
-                    'cart_type' => gettype( $cart ),
-                    'is_cart'   => is_a( $cart, 'WC_Cart' ) ? 'yes' : 'no',
-                )
-            );
-            return null;
-        }
-
-        return $cart;
-    }
-
-    /**
-     * Save user cart item with WooCommerce cart key.
-     * When $quantity_added is set (API context), existing item quantity is incremented by it;
-     * otherwise quantity is taken from WC cart (frontend sync).
-     *
-     * @param int    $user_id User ID
-     * @param string $wc_cart_item_key WooCommerce cart item key
-     * @param array  $wc_cart_item WooCommerce cart item data
-     * @param int|null $quantity_added Quantity added in this request (API only). If null, use WC cart quantity.
-     */
-    private function save_user_cart_item_with_wc_key( int $user_id, string $wc_cart_item_key, array $wc_cart_item, ?int $quantity_added = null ): void {
-        $user_cart = CartStorage::get_user_cart( $user_id );
-
-        $product_id = isset( $wc_cart_item['product_id'] ) ? absint( $wc_cart_item['product_id'] ) : 0;
-        $variation_id = isset( $wc_cart_item['variation_id'] ) ? absint( $wc_cart_item['variation_id'] ) : 0;
-        $variation_data = isset( $wc_cart_item['variation'] ) ? $wc_cart_item['variation'] : array();
-        if ( $variation_id > 0 ) {
-            $variation_data = array_merge( array( 'variation_id' => $variation_id ), $variation_data );
-        }
-        $wc_quantity = isset( $wc_cart_item['quantity'] ) ? absint( $wc_cart_item['quantity'] ) : 1;
-
-        $found_index = false;
-        foreach ( $user_cart as $index => $item ) {
-            if ( $item['product_id'] == $product_id &&
-                 ( isset( $item['variation_data']['variation_id'] ) ? absint( $item['variation_data']['variation_id'] ) : 0 ) == $variation_id &&
-                 ( empty( $variation_data ) || $item['variation_data'] == $variation_data ) ) {
-                $found_index = $index;
-                break;
-            }
-        }
-
-        if ( $found_index !== false ) {
-            $user_cart[ $found_index ]['key'] = $wc_cart_item_key;
-            if ( $quantity_added !== null ) {
-                $existing_qty = (int) ( $user_cart[ $found_index ]['quantity'] ?? 0 );
-                $user_cart[ $found_index ]['quantity'] = $existing_qty + $quantity_added;
-            } else {
-                $user_cart[ $found_index ]['quantity'] = $wc_quantity;
-            }
-            if ( ! empty( $variation_data ) ) {
-                $user_cart[ $found_index ]['variation_data'] = $variation_data;
-            }
-        } else {
-            $qty = $quantity_added !== null ? $quantity_added : $wc_quantity;
-            $user_cart[] = array(
-                'key'            => $wc_cart_item_key,
-                'product_id'     => $product_id,
-                'quantity'       => $qty,
-                'variation_data' => $variation_data,
-                'added_at'       => time(),
-            );
-        }
-
-        CartStorage::save_user_cart( $user_id, $user_cart );
     }
 
     /**
@@ -1279,22 +1377,51 @@ class CartAPI {
             return false;
         }
 
-        return preg_match( '/^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $guest_token ) === 1;
+        return CartContextResolver::is_valid_guest_token( $guest_token );
+    }
+
+    /**
+     * Route-specific rate-limit check for cart endpoints.
+     *
+     * @param string $route_key    Stable route key.
+     * @param int    $max_attempts Max attempts in window.
+     * @param int    $window       Window in seconds.
+     * @return bool
+     */
+    private function is_rate_limited( string $route_key, int $max_attempts, int $window ): bool {
+        $client_id = RateLimiter::get_client_id();
+        return ! RateLimiter::is_allowed( $route_key . ':' . $client_id, $max_attempts, $window );
+    }
+
+    /**
+     * Stable rate-limit response for cart endpoints.
+     *
+     * @return \WP_REST_Response
+     */
+    private function rate_limit_response(): \WP_REST_Response {
+        return new \WP_REST_Response(
+            array(
+                'success' => false,
+                'code'    => 'rate_limited',
+                'message' => __( 'Too many requests. Please try again shortly.', 'aicommerce' ),
+            ),
+            429
+        );
     }
 
     /**
      * Cart hash endpoint — returns MD5 of cart contents + item count.
-     * Lightweight: no writes, no WC session, used for polling.
+     * Lightweight: no writes, no WC session.
      */
     public function get_cart_hash( \WP_REST_Request $request ): \WP_REST_Response {
-        // Rate limit hash polling (lightweight individually, expensive at volume).
+        // Rate limit lightweight hash reads.
         $client_id = RateLimiter::get_client_id();
         if ( ! RateLimiter::is_allowed( 'cart_hash:' . $client_id, 120, 60 ) ) {
             // Keep response shape stable.
             return new \WP_REST_Response( array( 'hash' => '', 'count' => 0, 'version' => 0 ), 200 );
         }
 
-        $guest_token = sanitize_text_field( $request->get_param( 'guest_token' ) );
+        $guest_token = sanitize_text_field( (string) $request->get_param( 'guest_token' ) );
 
         if ( ! empty( $guest_token ) ) {
             if ( ! $this->validate_guest_token( $guest_token ) ) {

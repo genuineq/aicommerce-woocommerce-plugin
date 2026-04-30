@@ -24,19 +24,32 @@ class ProductFullAPI {
      * Constructor
      */
     public function __construct() {
+        /** Register the full product endpoints used by the iframe when it needs complete product context. */
         add_action( 'rest_api_init', array( $this, 'register_routes' ) );
+
+        /** Invalidate list and single-product caches whenever products are modified. */
         add_action( 'save_post_product', array( $this, 'clear_products_cache' ) );
         add_action( 'save_post_product', array( $this, 'clear_single_product_cache' ) );
         add_action( 'woocommerce_update_product', array( $this, 'clear_products_cache' ) );
         add_action( 'woocommerce_update_product', array( $this, 'clear_single_product_cache' ) );
+        add_action( 'woocommerce_product_set_stock', array( $this, 'clear_products_cache' ) );
+        add_action( 'woocommerce_product_set_stock', array( $this, 'clear_stock_product_cache' ) );
+        add_action( 'woocommerce_variation_set_stock', array( $this, 'clear_products_cache' ) );
+        add_action( 'woocommerce_variation_set_stock', array( $this, 'clear_stock_product_cache' ) );
+        add_action( 'woocommerce_product_set_stock_status', array( $this, 'clear_products_cache' ) );
+        add_action( 'woocommerce_product_set_stock_status', array( $this, 'clear_stock_status_product_cache' ), 10, 3 );
+        add_action( 'woocommerce_variation_set_stock_status', array( $this, 'clear_products_cache' ) );
+        add_action( 'woocommerce_variation_set_stock_status', array( $this, 'clear_stock_status_product_cache' ), 10, 3 );
     }
 
     /**
      * Register REST API routes
      */
     public function register_routes(): void {
+        /** Keep all full-data product routes under the plugin REST namespace. */
         $namespace = 'aicommerce/v1';
 
+        /** Register the single-product endpoint used when the iframe needs one complete product payload. */
         register_rest_route(
             $namespace,
             '/products/(?P<id>\d+)',
@@ -55,6 +68,7 @@ class ProductFullAPI {
             )
         );
 
+        /** Register the paginated full-product listing endpoint for catalog browsing. */
         register_rest_route(
             $namespace,
             '/products',
@@ -97,21 +111,26 @@ class ProductFullAPI {
      * GET /aicommerce/v1/products/{id}
      */
     public function get_product( \WP_REST_Request $request ): \WP_REST_Response {
+        /** Validate the iframe request before exposing product data. */
         $validation = APIValidator::validate_request( $request );
         if ( ! $validation['valid'] ) {
             return APIValidator::error_response( $validation );
         }
 
+        /** Normalize the requested product ID. */
         $product_id = absint( $request->get_param( 'id' ) );
 
-        $cache_key = 'aic_p_single_' . $product_id;
+        /** Cache complete single-product payloads because they are relatively expensive to assemble. */
+        $cache_key = 'aic_p_single_instock_' . $product_id;
         $cached    = get_transient( $cache_key );
         if ( false !== $cached ) {
             return new \WP_REST_Response( $cached, 200 );
         }
 
+        /** Load the WooCommerce product object for existence and status checks. */
         $product = wc_get_product( $product_id );
 
+        /** Reject missing products or non-product post types with a stable not-found payload. */
         if ( ! $product || 'product' !== get_post_type( $product_id ) ) {
             return new \WP_REST_Response(
                 array(
@@ -123,6 +142,7 @@ class ProductFullAPI {
             );
         }
 
+        /** Hide unpublished products from the iframe API. */
         if ( 'publish' !== $product->get_status() ) {
             return new \WP_REST_Response(
                 array(
@@ -134,9 +154,22 @@ class ProductFullAPI {
             );
         }
 
-        // Prime postmeta cache for the product (and its variations + images).
+        /** Hide unavailable products from indexing and catalog consumers. */
+        if ( ! $product->is_in_stock() ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'product_out_of_stock',
+                    'message' => __( 'Product is out of stock.', 'aicommerce' ),
+                ),
+                404
+            );
+        }
+
+        /** Build the full product payload using the same batch formatter used by paginated listing. */
         $products_data = $this->format_products_batch( array( $product_id ) );
 
+        /** Defend against formatter edge cases by returning not found if no payload was produced. */
         if ( empty( $products_data ) ) {
             return new \WP_REST_Response(
                 array(
@@ -148,11 +181,13 @@ class ProductFullAPI {
             );
         }
 
+        /** Wrap the full product in a stable success envelope expected by iframe consumers. */
         $data = array(
             'success' => true,
             'product' => $products_data[0],
         );
 
+        /** Cache the final single-product response for short repeated lookups. */
         set_transient( $cache_key, $data, 5 * MINUTE_IN_SECONDS );
         return new \WP_REST_Response( $data, 200 );
     }
@@ -161,24 +196,29 @@ class ProductFullAPI {
      * GET /aicommerce/v1/products
      */
     public function get_products( \WP_REST_Request $request ): \WP_REST_Response {
+        /** Validate the signed request before reading product catalog data. */
         $validation = APIValidator::validate_request( $request );
         if ( ! $validation['valid'] ) {
             return APIValidator::error_response( $validation );
         }
 
+        /** Normalize pagination and sort inputs. */
         $per_page = absint( $request->get_param( 'per_page' ) ) ?: 20;
         $page     = absint( $request->get_param( 'page' ) ) ?: 1;
-        $orderby  = sanitize_text_field( $request->get_param( 'orderby' ) );
-        $order    = strtoupper( sanitize_text_field( $request->get_param( 'order' ) ) );
+        $orderby  = sanitize_text_field( (string) $request->get_param( 'orderby' ) );
+        $order    = strtoupper( sanitize_text_field( (string) $request->get_param( 'order' ) ) );
 
-        $cache_key = 'aic_p_' . md5( $page . '|' . $per_page . '|' . $orderby . '|' . $order );
+        /** Cache full listing pages because their formatting cost is materially higher than lightweight search. */
+        $cache_key = 'aic_p_instock_' . md5( $page . '|' . $per_page . '|' . $orderby . '|' . $order );
         $cached    = get_transient( $cache_key );
         if ( false !== $cached ) {
             return new \WP_REST_Response( $cached, 200 );
         }
 
+        /** Query the current page of product IDs plus the total catalog count for the chosen ordering. */
         list( $ids, $total ) = $this->query_products( $per_page, $page, $orderby, $order );
 
+        /** Format the page of products into the iframe-facing response shape. */
         $products = $this->format_products_batch( $ids );
         $pages    = $per_page > 0 ? (int) ceil( $total / $per_page ) : 0;
 
@@ -191,6 +231,7 @@ class ProductFullAPI {
             'pages'        => $pages,
         );
 
+        /** Cache the assembled listing response for reuse by repeated iframe paging. */
         set_transient( $cache_key, $data, 30 * MINUTE_IN_SECONDS );
         return new \WP_REST_Response( $data, 200 );
     }
@@ -202,12 +243,14 @@ class ProductFullAPI {
      * Meta-based sorts (price, popularity, rating) add a single meta_key join.
      */
     private function query_products( int $per_page, int $page, string $orderby, string $order ): array {
+        /** Map supported public order keys to the WooCommerce meta keys required by WP_Query. */
         $meta_orderby_map = array(
             'price'      => '_price',
             'popularity' => 'total_sales',
             'rating'     => '_wc_average_rating',
         );
 
+        /** Start from a paginated published-products query. */
         $query_args = array(
             'post_type'      => 'product',
             'post_status'    => 'publish',
@@ -215,19 +258,29 @@ class ProductFullAPI {
             'paged'          => $page,
             'fields'         => 'ids',
             'order'          => in_array( $order, array( 'ASC', 'DESC' ), true ) ? $order : 'DESC',
+            'meta_query'     => array(
+                array(
+                    'key'   => '_stock_status',
+                    'value' => 'instock',
+                ),
+            ),
         );
 
+        /** Switch to numeric meta sorting for price, popularity, and rating. */
         if ( isset( $meta_orderby_map[ $orderby ] ) ) {
             $query_args['orderby']  = 'meta_value_num';
             $query_args['meta_key'] = $meta_orderby_map[ $orderby ];
         } else {
+            /** Fall back to a safe native post sort when the requested order key is unsupported. */
             $query_args['orderby'] = in_array( $orderby, array( 'title', 'menu_order', 'date' ), true )
                 ? $orderby
                 : 'date';
         }
 
+        /** Execute the paginated product query. */
         $query = new \WP_Query( $query_args );
 
+        /** Return the product IDs plus the total match count for pagination metadata. */
         return array( (array) $query->posts, (int) $query->found_posts );
     }
 
@@ -288,7 +341,7 @@ class ProductFullAPI {
 
         foreach ( $product_ids as $product_id ) {
             $product = wc_get_product( $product_id ); // reads from WP cache — 0 DB queries
-            if ( ! $product ) {
+            if ( ! $product || ! $product->is_in_stock() ) {
                 continue;
             }
 
@@ -422,7 +475,7 @@ class ProductFullAPI {
         if ( $product->is_type( 'variable' ) ) {
             foreach ( array_slice( $product->get_children(), 0, 20 ) as $variation_id ) {
                 $variation = wc_get_product( $variation_id ); // from cache
-                if ( ! $variation || ! $variation->is_purchasable() ) {
+                if ( ! $variation || ! $variation->is_purchasable() || ! $variation->is_in_stock() ) {
                     continue;
                 }
 
@@ -444,6 +497,7 @@ class ProductFullAPI {
                     'stock_status'   => $variation->get_stock_status(),
                     'stock_quantity' => $variation->get_stock_quantity(),
                     'manage_stock'   => $variation->get_manage_stock(),
+                    'availability'   => ProductAvailability::build_availability_payload( $product, $variation ),
                     'weight'         => $variation->get_weight(),
                     'dimensions'     => array(
                         'length' => $variation->get_length(),
@@ -537,6 +591,7 @@ class ProductFullAPI {
             'backorders'         => $product->get_backorders(),
             'backorders_allowed' => $product->backorders_allowed(),
             'sold_individually'  => $product->is_sold_individually(),
+            'availability'       => ProductAvailability::build_availability_payload( $product ),
 
             // Physical
             'weight'             => $product->get_weight(),
@@ -590,13 +645,37 @@ class ProductFullAPI {
      * @param int $product_id
      */
     public function clear_single_product_cache( int $product_id ): void {
+        delete_transient( 'aic_p_single_instock_' . $product_id );
         delete_transient( 'aic_p_single_' . $product_id );
+    }
+
+    /**
+     * Invalidate single-product cache when stock quantity changes.
+     */
+    public function clear_stock_product_cache( \WC_Product $product ): void {
+        $product_id = $product->get_parent_id() ?: $product->get_id();
+        if ( $product_id > 0 ) {
+            $this->clear_single_product_cache( (int) $product_id );
+        }
+    }
+
+    /**
+     * Invalidate single-product cache when stock status changes.
+     */
+    public function clear_stock_status_product_cache( int $product_id, string $stock_status = '', ?\WC_Product $product = null ): void {
+        if ( $product ) {
+            $product_id = $product->get_parent_id() ?: $product->get_id();
+        }
+
+        if ( $product_id > 0 ) {
+            $this->clear_single_product_cache( (int) $product_id );
+        }
     }
 
     /**
      * Invalidate products list cache when any product is saved.
      */
-    public function clear_products_cache(): void {
+    public function clear_products_cache( ...$args ): void {
         static $cleared = false;
         if ( $cleared ) {
             return;

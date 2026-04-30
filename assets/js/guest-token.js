@@ -1,18 +1,24 @@
 /**
  * AICommerce Guest Token Management
- * Cookie-first helpers for guest token + customer id.
+ * Cookie-first helpers for guest token.
  *
  * Goals:
  * - minimal JS work on page load
- * - avoid localStorage sync / double token generation
+ * - keep the same token across tabs when a cached page misses the cookie
  */
 
 (function() {
     'use strict';
 
     const COOKIE_NAME = 'aicommerce_guest_token';
-    const CUSTOMER_ID_COOKIE_NAME = 'aicommerce_customer_id';
+    const STORAGE_KEY = 'aicommerce_guest_token';
+    const cfg = (typeof aicommerceGuestTokenConfig !== 'undefined' && aicommerceGuestTokenConfig)
+        ? aicommerceGuestTokenConfig
+        : {};
 
+    function isValidToken(token) {
+        return /^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/.test(String(token || ''));
+    }
     /**
      * Get cookie value by name
      */
@@ -35,6 +41,44 @@
         document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax${secure}`;
     }
 
+    function getStoredToken() {
+        try {
+            const token = window.localStorage ? window.localStorage.getItem(STORAGE_KEY) : null;
+            return isValidToken(token) ? token : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function storeToken(token) {
+        if (!isValidToken(token)) return;
+
+        try {
+            if (window.localStorage) {
+                window.localStorage.setItem(STORAGE_KEY, token);
+            }
+        } catch (e) {
+            // Some browsers block storage; the cookie remains the source of truth.
+        }
+    }
+
+    function persistToken(token) {
+        if (!isValidToken(token)) return null;
+
+        setCookie(COOKIE_NAME, token, 365);
+        storeToken(token);
+        return token;
+    }
+
+    function getUrlToken() {
+        try {
+            const token = new URLSearchParams(window.location.search).get('guest_token');
+            return isValidToken(token) ? token : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
     /**
      * Generate unique token
      */
@@ -50,19 +94,36 @@
 
     function getOrCreateGuestToken() {
         const cookieToken = getCookie(COOKIE_NAME);
-        if (cookieToken) return cookieToken;
+        const storedToken = getStoredToken();
+        const urlToken = getUrlToken();
 
-        // Fallback only when server didn't set it (e.g. cached HTML). No localStorage.
+        if (urlToken) {
+            return persistToken(urlToken);
+        }
+
+        if (isValidToken(cookieToken)) {
+            storeToken(cookieToken);
+            return cookieToken;
+        }
+
+        if (storedToken) {
+            setCookie(COOKIE_NAME, storedToken, 365);
+            return storedToken;
+        }
+
+        if (isValidToken(cfg.token)) {
+            return persistToken(cfg.token);
+        }
+
+        // Fallback only when server didn't set it (e.g. cached HTML).
         const newToken = generateToken();
-        setCookie(COOKIE_NAME, newToken, 365);
-        return newToken;
+        return persistToken(newToken);
     }
 
     window.getAicommerceGuestToken = function() {
         return getOrCreateGuestToken() || null;
     };
 
-    window.getAicommerceCustomerId = function() {
-        return getCookie(CUSTOMER_ID_COOKIE_NAME) || null;
-    };
+    getOrCreateGuestToken();
+
 })();

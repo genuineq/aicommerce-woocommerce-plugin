@@ -1,59 +1,67 @@
 /**
- * AICommerce Cart Synchronization
+ * AICommerce explicit cart bridge sync.
  *
- * Syncs guest/user cart with WooCommerce session.
- * - Polls lightweight cart meta while popup is open
- * - Syncs on load, focus, and visibility changes only when version changes
+ * Sync points:
+ * - cart / checkout page load as a safety net
+ * - WooCommerce add / remove / quantity update events notify the iframe only
+ * - iframe popup open
+ * - iframe popup close
+ * - iframe cart mutation messages
+ * - global cart update events
+ * - window focus / visibility resume
+ * - explicit manual calls through window.aicommerceCartSync.sync()
  */
 (function() {
     'use strict';
 
-    /** Base API endpoint. */
     const API_BASE = '/wp-json/aicommerce/v1';
+    const SYNC_COOLDOWN_MS = 3500;
+    const RETRY_DELAY_MS = 1500;
+    const MAX_RETRIES = 1;
+    const CART_PAGE_RELOAD_DELAY_MS = 250;
 
-    /** Internal state flags. */
     let isSyncing = false;
-    let pollTimer = null;
-    let lastVersion = 0;
+    let lastSyncAt = 0;
+    let lastResumeSyncAt = 0;
+    let cartPageReloadTimer = null;
 
-    /** External configuration (if provided). */
-    const _cfg = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig)
+    const cfg = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig)
         ? aicommerceCartSyncConfig
         : {};
 
-    /** Whether to auto-sync on page load. */
-    const _autoSyncOnLoad = !!_cfg.auto_sync_on_load;
+    const autoSyncOnLoad = !!cfg.auto_sync_on_load;
 
-    /**
-     * Tracks if user has interacted (used to delay heavy sync logic).
-     */
-    let hasUserInteracted = false;
-
-    /** Debounce / cooldown for sync calls (ms). */
-    const SYNC_COOLDOWN_MS = 3500;
-    let lastSyncAt = 0;
-
-    /** Polling backoff configuration. */
-    const POLL_FAST_MS = 5000;   // first minute
-    const POLL_SLOW_MS = 12000;  // after first minute
-    const POLL_FAST_WINDOW_MS = 60000;
-
-    let pollingStartedAt = 0;
-
-    /** Retrieve guest token if available. */
     function getGuestToken() {
         return typeof getAicommerceGuestToken === 'function' ? getAicommerceGuestToken() : null;
     }
 
     function isLoggedIn() {
-        // WordPress adds `logged-in` to body class for authenticated users.
+        if (typeof cfg.logged_in !== 'undefined') {
+            return !!cfg.logged_in;
+        }
+
         return !!(document.body && document.body.classList && document.body.classList.contains('logged-in'));
     }
 
-    /** Check if we have any cart identifier. */
     function hasCartIdentifier() {
-        // Guests require a guest token; logged-in users can be resolved server-side.
         return !!(getGuestToken() || isLoggedIn());
+    }
+
+    function addIdentityToBody(body) {
+        const loggedIn = isLoggedIn();
+
+        if (loggedIn && cfg.user_id && cfg.cart_token) {
+            body.user_id = Number(cfg.user_id);
+            body.cart_token = cfg.cart_token;
+            return body;
+        }
+
+        const guestToken = getGuestToken();
+        if (guestToken && !loggedIn) {
+            body.guest_token = guestToken;
+        }
+
+        return body;
     }
 
     function isCheckoutPage() {
@@ -61,8 +69,12 @@
         return !!document.querySelector('form.checkout');
     }
 
+    function isCartPage() {
+        if (document.body && document.body.classList.contains('woocommerce-cart')) return true;
+        return !!document.querySelector('.woocommerce-cart-form');
+    }
+
     function shouldRefreshFragments() {
-        // Trigger fragments refresh only if a mini-cart / fragments UI is present.
         return !!(
             document.querySelector('.widget_shopping_cart') ||
             document.querySelector('.woocommerce-mini-cart') ||
@@ -72,6 +84,56 @@
         );
     }
 
+    function getIframe() {
+        const container = document.getElementById('aicommerce-iframe-container');
+        return container ? container.querySelector('iframe') : null;
+    }
+
+    function getIframeTargetOrigin(iframe) {
+        if (!iframe) return '*';
+
+        try {
+            const currentOrigin = iframe.contentWindow && iframe.contentWindow.location
+                ? iframe.contentWindow.location.origin
+                : '';
+
+            if (currentOrigin && currentOrigin !== 'null') {
+                return currentOrigin;
+            }
+        } catch (e) {
+            // Cross-origin iframe: fall back to the declared src origin.
+        }
+
+        if (!iframe.src) return '*';
+
+        try {
+            return new URL(iframe.src).origin;
+        } catch (e) {
+            return '*';
+        }
+    }
+
+    function notifyIframeCartChanged(detail) {
+        const iframe = getIframe();
+        if (!iframe || !iframe.contentWindow) return;
+
+        const message = {
+            type: 'aicommerce:cart_changed',
+            source: 'woocommerce',
+            detail: detail || {},
+        };
+
+        const targetOrigin = getIframeTargetOrigin(iframe);
+
+        try {
+            iframe.contentWindow.postMessage(message, targetOrigin);
+        } catch (e) {
+            if (targetOrigin !== window.location.origin) return;
+
+            iframe.contentWindow.postMessage(message, window.location.origin);
+        }
+    }
+
     function canSyncNow() {
         const now = Date.now();
         if (now - lastSyncAt < SYNC_COOLDOWN_MS) return false;
@@ -79,216 +141,366 @@
         return true;
     }
 
-    /**
-     * Lightweight cart meta fetch (read-only).
-     *
-     * - No writes
-     * - Fast (<10ms server-side)
-     *
-     * @returns {Promise<{hash:string|null, version:number, count:number}|null>}
-     */
-    async function fetchCartMeta() {
-        const guestToken = getGuestToken();
+    function shouldReloadCartPageAfterSync(reason) {
+        if (!isCartPage()) return false;
 
-        /** Build request URL. */
-        let url = API_BASE + '/cart/hash';
-
-        if (guestToken) {
-            url += '?guest_token=' + encodeURIComponent(guestToken);
-        } else {
-            // Logged-in user hash can be resolved by session; no query params needed.
-            if (!isLoggedIn()) return null;
-        }
-
-        try {
-            const res  = await fetch(url, { credentials: 'same-origin' });
-            const data = await res.json();
-
-            return {
-                hash: data.hash || null,
-                version: Number(data.version || 0),
-                count: Number(data.count || 0),
-            };
-        } catch (e) {
-            return null;
-        }
+        return [
+            'iframe_message',
+            'popup_closed',
+            'aicommerce:cart_updated',
+            'aicommerce:cart_changed',
+            'aicommerce:cart_added',
+            'aicommerce:cart_removed',
+            'aicommerce:cart_quantity_changed',
+            'window_focus',
+            'page_show',
+            'visibility_resume',
+        ].indexOf(reason || '') !== -1;
     }
 
-    /**
-     * Sync cart to WooCommerce session and refresh UI fragments.
-     */
-    async function syncCartToWCSession() {
-        if (isSyncing) return;
-        if (!canSyncNow()) return;
+    function reloadCartPageOnce() {
+        if (cartPageReloadTimer) return;
 
-        const guestToken = getGuestToken();
-        if (!guestToken && !isLoggedIn()) return;
+        cartPageReloadTimer = window.setTimeout(() => {
+            window.location.reload();
+        }, CART_PAGE_RELOAD_DELAY_MS);
+    }
+
+    async function syncCartToWCSession(options) {
+        const syncOptions = options || {};
+        const bypassCooldown = !!syncOptions.bypassCooldown;
+        const retryCount = Number(syncOptions.retryCount || 0);
+        const reason = syncOptions.reason || '';
+
+        if (isSyncing) return;
+        if (!bypassCooldown && !canSyncNow()) return;
+
+        const loggedIn = isLoggedIn();
+        if (!hasCartIdentifier()) return;
 
         isSyncing = true;
 
         try {
-            /** Build request body. */
-            const body = {};
+            const body = addIdentityToBody({});
+            const headers = { 'Content-Type': 'application/json' };
 
-            if (guestToken) body.guest_token = guestToken;
+            if (loggedIn && cfg.nonce) {
+                headers['X-WP-Nonce'] = cfg.nonce;
+            }
 
-            /** Send sync request. */
-            const res  = await fetch(API_BASE + '/cart/sync', {
-                method:      'POST',
-                headers:     { 'Content-Type': 'application/json' },
+            const res = await fetch(API_BASE + '/cart/sync', {
+                method: 'POST',
+                headers: headers,
                 credentials: 'same-origin',
-                body:        JSON.stringify(body),
+                body: JSON.stringify(body),
             });
 
             const data = await res.json();
 
-            /** Handle successful sync. */
             if (data && data.success) {
-                if (typeof data.version !== 'undefined') {
-                    lastVersion = Number(data.version || 0);
-                }
-
-                /** Refresh WooCommerce fragments if jQuery is available. */
                 if (typeof jQuery !== 'undefined') {
                     if (shouldRefreshFragments()) {
                         jQuery(document.body).trigger('wc_fragment_refresh');
                     }
+
                     if (isCheckoutPage()) {
                         jQuery(document.body).trigger('update_checkout');
                     }
                 }
 
-                /** Dispatch global event. */
+                if (shouldReloadCartPageAfterSync(reason)) {
+                    reloadCartPageOnce();
+                }
+
                 window.dispatchEvent(new CustomEvent('aicommerce_cart_synced', { detail: data }));
+                notifyIframeCartChanged({
+                    reason: 'bridge_sync',
+                    result: data,
+                });
+                return;
             }
+
+            throw new Error('Cart sync request was not successful.');
         } catch (e) {
-            /** Silent failure. */
+            if (retryCount < MAX_RETRIES) {
+                window.setTimeout(() => {
+                    syncCartToWCSession({
+                        bypassCooldown: true,
+                        retryCount: retryCount + 1,
+                    });
+                }, RETRY_DELAY_MS);
+            }
         } finally {
             isSyncing = false;
         }
     }
 
-    /**
-     * Start polling cart version with adaptive backoff.
-     *
-     * - Captures initial version
-     * - Syncs only when version changes
-     */
-    async function startPolling() {
-        if (pollTimer) return;
+    function notifyWooEventToIframe(eventName) {
+        notifyIframeCartChanged({
+            reason: eventName,
+        });
+    }
+
+    function bindWooCartEvents() {
+        const events = [
+            'added_to_cart',
+            'removed_from_cart',
+            'updated_cart_totals',
+            'updated_wc_div',
+            'wc-blocks_added_to_cart',
+        ];
+
+        if (typeof jQuery !== 'undefined') {
+            jQuery(document.body).on(events.join(' '), function(event) {
+                notifyWooEventToIframe(event.type);
+            });
+        }
+
+        events.forEach(function(eventName) {
+            document.body.addEventListener(eventName, function() {
+                notifyWooEventToIframe(eventName);
+            });
+        });
+    }
+
+    function parseMessageData(rawData) {
+        if (typeof rawData !== 'string') return rawData || {};
+
+        try {
+            return JSON.parse(rawData);
+        } catch (e) {
+            return { type: rawData };
+        }
+    }
+
+    function flattenMessageValues(value, values) {
+        if (value === null || typeof value === 'undefined') return;
+
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            values.push(String(value).toLowerCase());
+            return;
+        }
+
+        if (Array.isArray(value)) {
+            value.forEach(function(item) {
+                flattenMessageValues(item, values);
+            });
+            return;
+        }
+
+        if (typeof value === 'object') {
+            Object.keys(value).forEach(function(key) {
+                values.push(String(key).toLowerCase());
+                flattenMessageValues(value[key], values);
+            });
+        }
+    }
+
+    function isCartMutationMessage(rawData) {
+        const data = parseMessageData(rawData);
+        const values = [];
+        const cartChangeTypes = [
+            'aicommerce:cart_changed',
+            'aicommerce:cart_added',
+            'aicommerce:cart_add',
+            'aicommerce:cart_removed',
+            'aicommerce:cart_remove',
+            'aicommerce:cart_item_removed',
+            'aicommerce:cart_quantity_changed',
+            'aicommerce:cart_quantity_increased',
+            'aicommerce:cart_quantity_decreased',
+            'aicommerce:cart_updated',
+            'aicommerce_cart_changed',
+            'aicommerce_cart_added',
+            'aicommerce_cart_add',
+            'aicommerce_cart_removed',
+            'aicommerce_cart_remove',
+            'aicommerce_cart_item_removed',
+            'aicommerce_cart_quantity_changed',
+            'aicommerce_cart_quantity_increased',
+            'aicommerce_cart_quantity_decreased',
+            'aicommerce_cart_updated',
+            'cart_changed',
+            'cart_added',
+            'cart_add',
+            'cart_removed',
+            'cart_remove',
+            'cart_item_removed',
+            'cart_quantity_changed',
+            'cart_quantity_increased',
+            'cart_quantity_decreased',
+            'cart_updated',
+            'cart:changed',
+            'cart:added',
+            'cart:add',
+            'cart:removed',
+            'cart:remove',
+            'cart:item_removed',
+            'cart:quantity_changed',
+            'cart:quantity_increased',
+            'cart:quantity_decreased',
+            'cart:updated',
+            'add_to_cart',
+            'remove_from_cart',
+            'removed_from_cart',
+            'update_cart',
+            'updated_cart',
+            'quantity_changed',
+            'increase_quantity',
+            'decrease_quantity',
+        ];
+
+        flattenMessageValues(data, values);
+
+        if (values.some(function(value) {
+            return cartChangeTypes.indexOf(value) !== -1;
+        })) {
+            return true;
+        }
+
+        const joined = values.join(' ');
+        const hasCart = joined.indexOf('cart') !== -1 || joined.indexOf('cos') !== -1;
+        const hasMutation = [
+            'add',
+            'added',
+            'remove',
+            'removed',
+            'delete',
+            'deleted',
+            'update',
+            'updated',
+            'quantity',
+            'qty',
+            'increase',
+            'decrease',
+            'increment',
+            'decrement',
+        ].some(function(keyword) {
+            return joined.indexOf(keyword) !== -1;
+        });
+
+        return hasCart && hasMutation;
+    }
+
+    function bindIframeCartMessages() {
+        window.addEventListener('message', function(event) {
+            const iframe = getIframe();
+            if (!iframe) return;
+
+            const targetOrigin = getIframeTargetOrigin(iframe);
+            if (targetOrigin !== '*' && event.origin !== targetOrigin) return;
+
+            if (!isCartMutationMessage(event.data)) return;
+
+            syncCartToWCSession({
+                bypassCooldown: true,
+                reason: 'iframe_message',
+            });
+        });
+    }
+
+    function handleLocalCartUpdate(reason) {
         if (!hasCartIdentifier()) return;
-        pollingStartedAt = Date.now();
-        hasUserInteracted = true;
-        /** Capture baseline version. */
-        const initialMeta = await fetchCartMeta();
-        lastVersion = initialMeta ? Number(initialMeta.version || 0) : 0;
 
-        const tick = async () => {
-            if (!pollTimer) return;
-
-            /** Stop polling when tab is hidden. */
-            if (document.hidden) {
-                pollTimer = setTimeout(tick, POLL_SLOW_MS);
-                return;
-            }
-
-            const meta = await fetchCartMeta();
-
-            /** Sync only if version changed. */
-            if (meta && Number(meta.version || 0) > lastVersion) {
-                lastVersion = Number(meta.version || 0);
-                await syncCartToWCSession();
-            }
-
-            const elapsed = Date.now() - pollingStartedAt;
-            const delay = elapsed < POLL_FAST_WINDOW_MS ? POLL_FAST_MS : POLL_SLOW_MS;
-            pollTimer = setTimeout(tick, delay);
-        };
-
-        pollTimer = setTimeout(tick, POLL_FAST_MS);
+        syncCartToWCSession({
+            bypassCooldown: true,
+            reason: reason || 'cart_updated',
+        });
     }
 
-    /** Stop polling mechanism. */
-    function stopPolling() {
-        if (!pollTimer) return;
+    function bindGlobalCartUpdateEvents() {
+        const events = [
+            'aicommerce:cart_updated',
+            'aicommerce:cart_changed',
+            'aicommerce:cart_added',
+            'aicommerce:cart_removed',
+            'aicommerce:cart_quantity_changed',
+        ];
 
-        clearTimeout(pollTimer);
-        pollTimer = null;
+        events.forEach(function(eventName) {
+            window.addEventListener(eventName, function() {
+                handleLocalCartUpdate(eventName);
+            });
+
+            document.addEventListener(eventName, function() {
+                handleLocalCartUpdate(eventName);
+            });
+        });
     }
 
-    /**
-     * Initialize cart sync behavior.
-     *
-     * Handles:
-     * - Initial sync (optional)
-     * - Popup lifecycle events
-     * - Tab visibility + focus sync
-     */
-    function init() {
-        async function syncIfVersionChanged() {
+    function bindResumeEvents() {
+        function syncOnResume(reason) {
             if (!hasCartIdentifier()) return;
 
-            const meta = await fetchCartMeta();
-            if (!meta) return;
+            const now = Date.now();
+            if (now - lastResumeSyncAt < 750) return;
+            lastResumeSyncAt = now;
 
-            const version = Number(meta.version || 0);
-            if (version > lastVersion) {
-                lastVersion = version;
-                await syncCartToWCSession();
-            }
+            syncCartToWCSession({
+                bypassCooldown: true,
+                reason: reason,
+            });
         }
 
-        /** Optional initial sync (e.g. cart/checkout pages). */
-        if (_autoSyncOnLoad && hasCartIdentifier()) {
-            syncIfVersionChanged();
-        }
-
-        /** Handle popup open → start polling. */
-        window.addEventListener('aicommerce:popup_opened', () => {
-            hasUserInteracted = true;
-
-            /** Ensure WC session is synced before polling starts. */
-            if (hasCartIdentifier()) {
-                syncIfVersionChanged().finally(startPolling);
-            } else {
-                // No identifier: avoid useless polling / sync calls.
-            }
+        window.addEventListener('focus', function() {
+            syncOnResume('window_focus');
         });
 
-        /** Handle popup close → stop polling. */
-        window.addEventListener('aicommerce:popup_closed', () => {
-            stopPolling();
+        window.addEventListener('pageshow', function() {
+            syncOnResume('page_show');
         });
 
-        /** Sync when returning to visible tab. */
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && hasUserInteracted && hasCartIdentifier()) {
-                syncIfVersionChanged();
-            }
-        });
-
-        /** Sync on window focus. */
-        window.addEventListener('focus', () => {
-            if (hasUserInteracted && hasCartIdentifier()) {
-                syncIfVersionChanged();
-            }
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) return;
+            syncOnResume('visibility_resume');
         });
     }
 
-    /** Initialize when DOM is ready. */
+    function init() {
+        if (autoSyncOnLoad && hasCartIdentifier()) {
+            syncCartToWCSession();
+        }
+
+        bindWooCartEvents();
+        bindIframeCartMessages();
+        bindGlobalCartUpdateEvents();
+        bindResumeEvents();
+
+        /**
+         * Keep the storefront cart aligned when the chat popup is opened.
+         *
+         * This is useful when the chat updated the persistent cart before the
+         * browser reached a WooCommerce page where the safety-net import runs.
+         */
+        window.addEventListener('aicommerce:popup_opened', function() {
+            if (!hasCartIdentifier()) return;
+            syncCartToWCSession({
+                bypassCooldown: true,
+                reason: 'popup_opened',
+            });
+        });
+
+        /**
+         * Re-apply sync once the popup closes so any last chat-side cart
+         * mutation is reflected in Woo fragments and checkout UI.
+         */
+        window.addEventListener('aicommerce:popup_closed', function() {
+            if (!hasCartIdentifier()) return;
+            syncCartToWCSession({
+                bypassCooldown: true,
+                reason: 'popup_closed',
+            });
+        });
+    }
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
         init();
     }
 
-    /**
-     * Public API exposure.
-     */
     window.aicommerceCartSync = {
-        sync:         syncCartToWCSession,
-        startPolling: startPolling,
-        stopPolling:  stopPolling,
+        sync: syncCartToWCSession,
+        notifyCartUpdated: handleLocalCartUpdate,
     };
-
 })();

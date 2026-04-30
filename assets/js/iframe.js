@@ -21,6 +21,9 @@
     const overlay = modal ? modal.querySelector('.aicommerce-iframe-modal-overlay') : null;
     const iframeContainer = document.getElementById('aicommerce-iframe-container');
     const placeholder = document.getElementById('aicommerce-iframe-placeholder');
+    let lockedScrollY = 0;
+    let isPageScrollLocked = false;
+    let previousScrollStyles = null;
 
     /** Abort initialization if required elements are missing. */
     if (!button || !modal || !closeButton) return;
@@ -43,9 +46,7 @@
     }
 
     /**
-     * Generate iframe URL dynamically based on:
-     * - Customer ID (preferred)
-     * - Guest token (fallback)
+     * Generate iframe URL dynamically based on guest token fallback only.
      *
      * @returns {string} Fully constructed iframe URL or empty string
      */
@@ -53,12 +54,104 @@
         // URL should be provided by the server (`settings.url`) or in the DOM (`data-src`).
         // This function is retained as a safe fallback but avoids exposing API keys.
         const guestToken = typeof getAicommerceGuestToken === 'function' ? getAicommerceGuestToken() : '';
-        const customerId = typeof getAicommerceCustomerId === 'function' ? getAicommerceCustomerId() : '';
 
         // Without a base URL + signature, we can't safely build the iframe URL here.
         // Return empty string so the placeholder is shown instead of guessing.
-        if (!guestToken && !customerId) return '';
+        if (!guestToken) return '';
         return '';
+    }
+
+    /**
+     * Keep the iframe identity aligned with the active storefront guest token.
+     *
+     * The server renders data-src from the cookie, while guest-token.js can recover
+     * a token from localStorage on cached pages. Normalize the iframe URL at open
+     * time so the chat app and cart sync API use the same identifier.
+     *
+     * @param {string} url Iframe URL rendered by PHP.
+     * @returns {string} URL with synchronized guest token parameters.
+     */
+    function syncGuestTokenInIframeUrl(url) {
+        if (!url) return url;
+
+        try {
+            const parsed = new URL(url, window.location.href);
+
+            if (settings.logged_in && settings.user_id) {
+                parsed.searchParams.set('c', String(settings.user_id));
+                parsed.searchParams.set('user_id', String(settings.user_id));
+                if (settings.cart_token) {
+                    parsed.searchParams.set('cart_token', String(settings.cart_token));
+                    parsed.searchParams.set('t', String(settings.cart_token));
+                }
+                parsed.searchParams.delete('g');
+                parsed.searchParams.delete('guest_token');
+                return parsed.toString();
+            }
+
+            if (parsed.searchParams.get('c') || parsed.searchParams.get('user_id')) {
+                return parsed.toString();
+            }
+
+            if (typeof getAicommerceGuestToken !== 'function') return url;
+
+            const guestToken = getAicommerceGuestToken();
+            if (!guestToken) return url;
+
+            parsed.searchParams.set('g', guestToken);
+            parsed.searchParams.set('guest_token', guestToken);
+
+            return parsed.toString();
+        } catch (e) {
+            return url;
+        }
+    }
+
+    /**
+     * Lock the storefront scroll while the iframe modal is open.
+     */
+    function lockPageScroll() {
+        if (isPageScrollLocked) return;
+
+        lockedScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+        isPageScrollLocked = true;
+        previousScrollStyles = {
+            htmlOverflow: document.documentElement.style.overflow,
+            bodyOverflow: document.body.style.overflow,
+            bodyPosition: document.body.style.position,
+            bodyTop: document.body.style.top,
+            bodyLeft: document.body.style.left,
+            bodyRight: document.body.style.right,
+            bodyWidth: document.body.style.width
+        };
+
+        document.documentElement.style.overflow = 'hidden';
+        document.body.style.overflow = 'hidden';
+        document.body.style.position = 'fixed';
+        document.body.style.top = '-' + lockedScrollY + 'px';
+        document.body.style.left = '0';
+        document.body.style.right = '0';
+        document.body.style.width = '100%';
+    }
+
+    /**
+     * Restore the storefront scroll state after the iframe modal closes.
+     */
+    function unlockPageScroll() {
+        if (!isPageScrollLocked) return;
+
+        isPageScrollLocked = false;
+
+        document.documentElement.style.overflow = previousScrollStyles ? previousScrollStyles.htmlOverflow : '';
+        document.body.style.overflow = previousScrollStyles ? previousScrollStyles.bodyOverflow : '';
+        document.body.style.position = previousScrollStyles ? previousScrollStyles.bodyPosition : '';
+        document.body.style.top = previousScrollStyles ? previousScrollStyles.bodyTop : '';
+        document.body.style.left = previousScrollStyles ? previousScrollStyles.bodyLeft : '';
+        document.body.style.right = previousScrollStyles ? previousScrollStyles.bodyRight : '';
+        document.body.style.width = previousScrollStyles ? previousScrollStyles.bodyWidth : '';
+        previousScrollStyles = null;
+
+        window.scrollTo(0, lockedScrollY);
     }
 
     /**
@@ -77,7 +170,7 @@
         modal.style.display = 'flex';
 
         /** Disable background scroll. */
-        document.body.style.overflow = 'hidden';
+        lockPageScroll();
 
         /** Notify external listeners. */
         window.dispatchEvent(new CustomEvent('aicommerce:popup_opened'));
@@ -86,7 +179,7 @@
 
         /** Resolve iframe URL priority. */
         const serverUrl = iframeContainer.getAttribute('data-src') || '';
-        const url = serverUrl || settings.url || generateIframeUrl();
+        const url = syncGuestTokenInIframeUrl(serverUrl || settings.url || generateIframeUrl());
 
         /** Show placeholder if no valid URL. */
         if (!url) {
@@ -138,7 +231,7 @@
         modal.style.display = 'none';
 
         /** Restore body scroll. */
-        document.body.style.overflow = '';
+        unlockPageScroll();
 
         /** Notify external listeners. */
         window.dispatchEvent(new CustomEvent('aicommerce:popup_closed'));
@@ -185,7 +278,11 @@
                 if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
                     /** Sync body scroll state. */
                     const isOpen = modal.style.display !== 'none';
-                    document.body.style.overflow = isOpen ? 'hidden' : '';
+                    if (isOpen) {
+                        lockPageScroll();
+                    } else {
+                        unlockPageScroll();
+                    }
                 }
             });
         });
