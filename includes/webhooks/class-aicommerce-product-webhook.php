@@ -85,19 +85,10 @@ class ProductWebhook {
 	private static array $imported_ids = [];
 
 	/**
-	 * Write a compact product webhook diagnostic line to the PHP error log.
-	 *
-	 * @param string $event   Diagnostic event name.
-	 * @param array  $context Extra context.
-	 * @return void
+	 * Debug logging is intentionally disabled in production builds.
 	 */
 	private static function log_debug( string $event, array $context = array() ): void {
-		if ( ! function_exists( 'error_log' ) ) {
-			return;
-		}
-
-		$payload = function_exists( 'wp_json_encode' ) ? wp_json_encode( $context ) : json_encode( $context );
-		error_log( '[AICOM][ProductWebhook] ' . $event . ' ' . ( $payload ?: '{}' ) );
+		return;
 	}
 
 	/**
@@ -111,6 +102,44 @@ class ProductWebhook {
 		return ( ! empty( $api_key ) && 0 === strpos( $api_key, 'staging_' ) )
 			? self::WEBHOOK_URL_STAGING
 			: self::WEBHOOK_URL;
+	}
+
+	/**
+	 * Decide whether broad lifecycle product events should be processed.
+	 *
+	 * Frontend checkout requests can save products while reducing stock. In that
+	 * path we only want the explicit stock hooks, not a generic product.updated
+	 * batch that can include unrelated products accumulated by bulk operations.
+	 *
+	 * @return bool
+	 */
+	private static function should_handle_product_lifecycle_event(): bool {
+		if ( self::$in_import ) {
+			return true;
+		}
+
+		if ( is_admin() ) {
+			return true;
+		}
+
+		if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
+			return true;
+		}
+
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			return true;
+		}
+
+		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '';
+		if ( false !== strpos( $request_uri, '/wc/store/' ) ) {
+			return false;
+		}
+
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			return true;
+		}
+
+		return false;
 	}
 
 	/**
@@ -171,6 +200,17 @@ class ProductWebhook {
 	 * @return void
 	 */
 	public function on_product_created( int $product_id, \WC_Product $product ): void {
+		if ( ! self::should_handle_product_lifecycle_event() ) {
+			self::log_debug(
+				'hook:woocommerce_new_product_skipped_context',
+				array(
+					'product_id'  => $product_id,
+					'request_uri' => isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '',
+				)
+			);
+			return;
+		}
+
 		self::log_debug(
 			'hook:woocommerce_new_product',
 			array(
@@ -200,6 +240,18 @@ class ProductWebhook {
 	 * @return void
 	 */
 	public function on_product_updated( int $product_id, \WC_Product $product ): void {
+		if ( ! self::should_handle_product_lifecycle_event() ) {
+			self::log_debug(
+				'hook:woocommerce_update_product_skipped_context',
+				array(
+					'product_id'  => $product_id,
+					'type'        => $product->get_type(),
+					'request_uri' => isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '',
+				)
+			);
+			return;
+		}
+
 		self::log_debug(
 			'hook:woocommerce_update_product',
 			array(
@@ -225,6 +277,17 @@ class ProductWebhook {
 	 * @return void
 	 */
 	public function on_product_trashed( int $post_id ): void {
+		if ( ! self::should_handle_product_lifecycle_event() ) {
+			self::log_debug(
+				'hook:wp_trash_post_skipped_context',
+				array(
+					'post_id'     => $post_id,
+					'request_uri' => isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '',
+				)
+			);
+			return;
+		}
+
 		if ( 'product' !== get_post_type( $post_id ) ) {
 			self::log_debug(
 				'hook:wp_trash_post_skipped',
@@ -248,6 +311,17 @@ class ProductWebhook {
 	 * @return void
 	 */
 	public function on_product_deleted( int $post_id ): void {
+		if ( ! self::should_handle_product_lifecycle_event() ) {
+			self::log_debug(
+				'hook:before_delete_post_skipped_context',
+				array(
+					'post_id'     => $post_id,
+					'request_uri' => isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '',
+				)
+			);
+			return;
+		}
+
 		if ( 'product' !== get_post_type( $post_id ) ) {
 			self::log_debug(
 				'hook:before_delete_post_skipped',
@@ -271,6 +345,17 @@ class ProductWebhook {
 	 * @return void
 	 */
 	public function on_product_restored( int $post_id ): void {
+		if ( ! self::should_handle_product_lifecycle_event() ) {
+			self::log_debug(
+				'hook:untrashed_post_skipped_context',
+				array(
+					'post_id'     => $post_id,
+					'request_uri' => isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : '',
+				)
+			);
+			return;
+		}
+
 		if ( 'product' !== get_post_type( $post_id ) ) {
 			self::log_debug(
 				'hook:untrashed_post_skipped',

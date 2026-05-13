@@ -17,15 +17,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class CartAPI {
     /**
-     * Lightweight debug logger for cart API flows.
+     * Debug logging is intentionally disabled in production builds.
      */
     private static function log_debug( string $event, array $context = array() ): void {
-        if ( ! function_exists( 'error_log' ) ) {
-            return;
-        }
-
-        $payload = wp_json_encode( $context );
-        error_log( '[AICOM][CartAPI] ' . $event . ' ' . ( $payload ?: '{}' ) );
+        return;
     }
 
     /**

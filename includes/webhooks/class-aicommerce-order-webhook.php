@@ -128,12 +128,12 @@ class OrderWebhook {
 		$user_id = (int) $order->get_customer_id();
 
 		if ( $user_id > 0 ) {
-			CartStorage::delete_user_cart( $user_id );
+			CartStorage::save_user_cart( $user_id, array() );
 			return;
 		}
 
 		if ( ! empty( $guest_token ) ) {
-			CartStorage::delete_cart( $guest_token );
+			CartStorage::save_cart( $guest_token, array() );
 		}
 	}
 

@@ -232,6 +232,8 @@ class AICommerce {
         add_action( 'wp_login', array( $this, 'merge_guest_cart_into_user_after_login' ), 10, 2 );
         add_action( 'wp_logout', array( $this, 'preserve_user_cart_for_guest_after_logout' ), 10, 1 );
 
+        new \AICommerce\WooCartBridge();
+
         // REST endpoints are needed only for REST requests.
         if ( $this->is_rest_request() ) {
             $this->load_rest_api();
@@ -316,19 +318,6 @@ class AICommerce {
         \AICommerce\CartStorage::save_user_cart( $user_id, $sanitized['items'] );
         \AICommerce\WooCartBridge::import_storage_to_wc_cart( '', $user_id );
 
-        if ( function_exists( 'error_log' ) ) {
-            error_log(
-                '[AICOM][CartLogin] merge_guest_into_user ' . wp_json_encode(
-                    array(
-                        'user_id'              => $user_id,
-                        'guest_count'          => count( $guest_items ),
-                        'aicom_user_count'     => count( $user_items ),
-                        'wc_persistent_count'  => count( $persistent_wc_items ),
-                        'merged_count'         => count( $sanitized['items'] ),
-                    )
-                )
-            );
-        }
     }
 
     /**
@@ -610,7 +599,6 @@ class AICommerce {
 
         new \AICommerce\Iframe();
         new \AICommerce\GuestToken();
-        new \AICommerce\WooCartBridge();
         new \AICommerce\CartSync();
     }
 
@@ -639,7 +627,7 @@ class AICommerce {
         }
 
         // Order webhooks can fire on checkout, admin status updates, and background tasks.
-        if ( $this->is_frontend_request() || is_admin() || $is_cron || $is_cli ) {
+        if ( $this->is_frontend_request() || is_admin() || $this->is_rest_request() || $is_cron || $is_cli ) {
             require_once AICOMMERCE_PLUGIN_DIR . 'includes/webhooks/class-aicommerce-order-webhook.php';
             new \AICommerce\OrderWebhook();
         }

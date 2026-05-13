@@ -31,15 +31,33 @@ class WooCartBridge {
 	private const LOCK_TTL = 6;
 
 	/**
+	 * Debug logging is intentionally disabled in production builds.
+	 */
+	private static function log_debug( string $event, array $context = array() ): void {
+		return;
+	}
+
+	/**
 	 * Constructor.
 	 */
 	public function __construct() {
+		self::log_debug(
+			'construct:hooks_registered',
+			array(
+				'is_admin'   => is_admin(),
+				'is_rest'    => defined( 'REST_REQUEST' ) && REST_REQUEST,
+				'doing_cron' => defined( 'DOING_CRON' ) && DOING_CRON,
+			)
+		);
+
 		add_action( 'woocommerce_before_cart', array( $this, 'import_current_storage_to_wc_cart' ) );
 		add_action( 'woocommerce_before_checkout_form', array( $this, 'import_current_storage_to_wc_cart' ) );
 		add_action( 'woocommerce_add_to_cart', array( $this, 'export_current_wc_cart_to_storage' ), 20, 0 );
 		add_action( 'woocommerce_after_cart_item_quantity_update', array( $this, 'export_current_wc_cart_to_storage' ), 20, 0 );
 		add_action( 'woocommerce_cart_item_removed', array( $this, 'export_current_wc_cart_to_storage' ), 20, 0 );
 		add_action( 'woocommerce_cart_item_restored', array( $this, 'export_current_wc_cart_to_storage' ), 20, 0 );
+		add_action( 'woocommerce_checkout_order_created', array( $this, 'clear_current_storage_after_checkout' ), 20, 1 );
+		add_action( 'woocommerce_store_api_checkout_order_processed', array( $this, 'clear_current_storage_after_checkout' ), 20, 1 );
 	}
 
 	/**
@@ -75,6 +93,65 @@ class WooCartBridge {
 		self::export_wc_cart_to_storage(
 			(string) $context['guest_token'],
 			$context['user_id'] ? (int) $context['user_id'] : null
+		);
+	}
+
+	/**
+	 * Mark the active AICommerce cart as empty once WooCommerce creates an order.
+	 *
+	 * WooCommerce clears its session cart after checkout, but AICommerce keeps a
+	 * separate canonical cart. If that canonical cart still contains the purchased
+	 * items, a later cart/checkout sync can re-import them into WooCommerce.
+	 *
+	 * @param \WC_Order|int $order Order object or order ID.
+	 * @return void
+	 */
+	public function clear_current_storage_after_checkout( $order ): void {
+		$order = $order instanceof \WC_Order ? $order : wc_get_order( $order );
+		if ( ! $order ) {
+			self::log_debug( 'checkout_clear:skipped_missing_order' );
+			return;
+		}
+
+		$user_id = (int) $order->get_customer_id();
+		if ( $user_id > 0 ) {
+			CartStorage::save_user_cart( $user_id, array() );
+			self::clear_wc_persistent_cart( $user_id );
+			self::set_synced_state( CartContextResolver::get_context_key( '', $user_id ), 0, 'empty' );
+			self::log_debug(
+				'checkout_clear:user_cart_emptied',
+				array(
+					'order_id' => $order->get_id(),
+					'user_id'  => $user_id,
+				)
+			);
+			return;
+		}
+
+		$guest_token = isset( $_COOKIE['aicommerce_guest_token'] )
+			? sanitize_text_field( wp_unslash( $_COOKIE['aicommerce_guest_token'] ) )
+			: '';
+
+		if ( empty( $guest_token ) || ! CartContextResolver::is_valid_guest_token( $guest_token ) ) {
+			self::log_debug(
+				'checkout_clear:skipped_missing_guest_token',
+				array(
+					'order_id'             => $order->get_id(),
+					'guest_token_present'  => ! empty( $guest_token ),
+				)
+			);
+			return;
+		}
+
+		CartStorage::save_cart( $guest_token, array() );
+		self::set_synced_state( CartContextResolver::get_context_key( $guest_token, null ), 0, 'empty' );
+		self::log_debug(
+			'checkout_clear:guest_cart_emptied',
+			array(
+				'order_id'     => $order->get_id(),
+				'guest_token'  => $guest_token,
+				'storage_key'  => CartStorage::get_guest_cart_option_name( $guest_token ),
+			)
 		);
 	}
 
@@ -305,6 +382,20 @@ class WooCartBridge {
 		if ( function_exists( 'WC' ) && WC() && WC()->session ) {
 			WC()->session->set( 'cart', $cart->get_cart_for_session() );
 		}
+	}
+
+	/**
+	 * Remove WooCommerce's saved persistent cart for a user after checkout.
+	 *
+	 * @param int $user_id User ID.
+	 * @return void
+	 */
+	private static function clear_wc_persistent_cart( int $user_id ): void {
+		if ( $user_id <= 0 ) {
+			return;
+		}
+
+		delete_user_meta( $user_id, '_woocommerce_persistent_cart_' . get_current_blog_id() );
 	}
 
 	/**

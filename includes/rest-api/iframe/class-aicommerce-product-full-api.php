@@ -118,17 +118,26 @@ class ProductFullAPI {
         }
 
         /** Normalize the requested product ID. */
-        $product_id = absint( $request->get_param( 'id' ) );
+        $requested_id = absint( $request->get_param( 'id' ) );
+        $product_id   = $requested_id;
+        $variation_id = 0;
 
         /** Cache complete single-product payloads because they are relatively expensive to assemble. */
-        $cache_key = 'aic_p_single_instock_' . $product_id;
+        $cache_key = 'aic_p_single_instock_' . $requested_id;
         $cached    = get_transient( $cache_key );
         if ( false !== $cached ) {
             return new \WP_REST_Response( $cached, 200 );
         }
 
         /** Load the WooCommerce product object for existence and status checks. */
-        $product = wc_get_product( $product_id );
+        $product = wc_get_product( $requested_id );
+
+        /** Variation IDs resolve to their parent product while preserving the requested variation. */
+        if ( $product && $product->is_type( 'variation' ) ) {
+            $variation_id = $product->get_id();
+            $product_id   = $product->get_parent_id();
+            $product      = $product_id > 0 ? wc_get_product( $product_id ) : false;
+        }
 
         /** Reject missing products or non-product post types with a stable not-found payload. */
         if ( ! $product || 'product' !== get_post_type( $product_id ) ) {
@@ -167,7 +176,10 @@ class ProductFullAPI {
         }
 
         /** Build the full product payload using the same batch formatter used by paginated listing. */
-        $products_data = $this->format_products_batch( array( $product_id ) );
+        $forced_variations = $variation_id > 0
+            ? array( $product_id => array( $variation_id ) )
+            : array();
+        $products_data = $this->format_products_batch( array( $product_id ), $forced_variations );
 
         /** Defend against formatter edge cases by returning not found if no payload was produced. */
         if ( empty( $products_data ) ) {
@@ -183,8 +195,10 @@ class ProductFullAPI {
 
         /** Wrap the full product in a stable success envelope expected by iframe consumers. */
         $data = array(
-            'success' => true,
-            'product' => $products_data[0],
+            'success'                => true,
+            'product'                => $products_data[0],
+            'requested_id'           => $requested_id,
+            'requested_variation_id' => $variation_id ?: null,
         );
 
         /** Cache the final single-product response for short repeated lookups. */
@@ -295,7 +309,7 @@ class ProductFullAPI {
      *   ─────────────────────────────────────────────────────────────────
      *   ~5 + number_of_taxonomies  (typically 8–12 total)
      */
-    private function format_products_batch( array $product_ids ): array {
+    private function format_products_batch( array $product_ids, array $forced_variation_ids = array() ): array {
         if ( empty( $product_ids ) ) {
             return array();
         }
@@ -348,7 +362,17 @@ class ProductFullAPI {
             $wc_products[ $product_id ] = $product;
 
             if ( $product->is_type( 'variable' ) ) {
-                $var_ids           = array_slice( $product->get_children(), 0, 20 );
+                $var_ids = array_slice( $product->get_children(), 0, 20 );
+                if ( ! empty( $forced_variation_ids[ $product_id ] ) && is_array( $forced_variation_ids[ $product_id ] ) ) {
+                    $var_ids = array_values(
+                        array_unique(
+                            array_merge(
+                                $var_ids,
+                                array_map( 'absint', $forced_variation_ids[ $product_id ] )
+                            )
+                        )
+                    );
+                }
                 $all_variation_ids = array_merge( $all_variation_ids, $var_ids );
             }
 
@@ -381,7 +405,10 @@ class ProductFullAPI {
             $products[] = $this->format_product_full(
                 $wc_products[ $product_id ],
                 $terms_map,
-                $taxonomies
+                $taxonomies,
+                isset( $forced_variation_ids[ $product_id ] ) && is_array( $forced_variation_ids[ $product_id ] )
+                    ? $forced_variation_ids[ $product_id ]
+                    : array()
             );
         }
 
@@ -398,7 +425,7 @@ class ProductFullAPI {
      * @param array       $terms_map  [taxonomy => [product_id => [term_data]]]
      * @param array       $taxonomies All registered product taxonomies.
      */
-    private function format_product_full( \WC_Product $product, array $terms_map, array $taxonomies ): array {
+    private function format_product_full( \WC_Product $product, array $terms_map, array $taxonomies, array $forced_variation_ids = array() ): array {
         $product_id = $product->get_id();
 
         // ── Images ───────────────────────────────────────────────────────────
@@ -473,9 +500,21 @@ class ProductFullAPI {
         // ── Variations (variable products only) ───────────────────────────────
         $variations_data = array();
         if ( $product->is_type( 'variable' ) ) {
-            foreach ( array_slice( $product->get_children(), 0, 20 ) as $variation_id ) {
+            $variation_ids = array_slice( $product->get_children(), 0, 20 );
+            if ( ! empty( $forced_variation_ids ) ) {
+                $variation_ids = array_values(
+                    array_unique(
+                        array_merge(
+                            $variation_ids,
+                            array_map( 'absint', $forced_variation_ids )
+                        )
+                    )
+                );
+            }
+
+            foreach ( $variation_ids as $variation_id ) {
                 $variation = wc_get_product( $variation_id ); // from cache
-                if ( ! $variation || ! $variation->is_purchasable() || ! $variation->is_in_stock() ) {
+                if ( ! $variation || (int) $variation->get_parent_id() !== (int) $product_id || ! $variation->is_purchasable() || ! $variation->is_in_stock() ) {
                     continue;
                 }
 

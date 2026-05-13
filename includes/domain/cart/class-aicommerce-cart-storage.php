@@ -48,19 +48,10 @@ class CartStorage {
     }
 
     /**
-     * Log guest cart storage diagnostics when WordPress logging is available.
-     *
-     * @param string $event   Event name.
-     * @param array  $context Event context.
-     * @return void
+     * Debug logging is intentionally disabled in production builds.
      */
     private static function log_debug( string $event, array $context = array() ): void {
-        if ( ! function_exists( 'error_log' ) ) {
-            return;
-        }
-
-        $payload = wp_json_encode( $context );
-        error_log( '[AICOM][CartStorage] ' . $event . ' ' . ( $payload ?: '{}' ) );
+        return;
     }
 
     /**
