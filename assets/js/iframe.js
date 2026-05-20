@@ -199,6 +199,7 @@
             /** Configure iframe. */
             iframe.id = 'aicommerce-iframe';
             iframe.setAttribute('frameborder', '0');
+            iframe.setAttribute('allow', 'microphone');
             iframe.setAttribute('allowfullscreen', '');
 
             /** Append iframe. */

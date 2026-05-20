@@ -42,6 +42,7 @@ class WebhookDeliveryLog {
 	public static function log_pending( string $delivery_id, string $type, string $event, string $url, array $payload ): void {
 		$log   = self::get_log();
 		$entry = isset( $log[ $delivery_id ] ) && is_array( $log[ $delivery_id ] ) ? $log[ $delivery_id ] : array();
+		$safe_payload = self::redact_payload( $payload );
 
 		$log[ $delivery_id ] = array(
 			'delivery_id'     => $delivery_id,
@@ -49,7 +50,7 @@ class WebhookDeliveryLog {
 			'event'           => $event,
 			'status'          => 'pending',
 			'url'             => $url,
-			'payload'         => $payload,
+			'payload'         => $safe_payload,
 			'attempt_count'   => (int) ( $entry['attempt_count'] ?? 0 ) + 1,
 			'created_at'      => (string) ( $entry['created_at'] ?? gmdate( 'c' ) ),
 			'last_attempt_at' => gmdate( 'c' ),
@@ -59,6 +60,20 @@ class WebhookDeliveryLog {
 		);
 
 		self::store_log( $log );
+	}
+
+	/**
+	 * Redact secrets before persisting webhook payloads.
+	 *
+	 * @param array $payload Outgoing payload.
+	 * @return array
+	 */
+	private static function redact_payload( array $payload ): array {
+		if ( array_key_exists( 'api_secret', $payload ) ) {
+			$payload['api_secret'] = '[redacted]';
+		}
+
+		return $payload;
 	}
 
 	/**

@@ -1165,6 +1165,8 @@ class ProductWebhook {
 	 * @throws \Exception On HTTP failure.
 	 */
 	private function send_webhook_request( array $payload, string $event, string $delivery_id ): void {
+		$payload['api_secret'] = Settings::get_api_secret();
+
 		$body      = wp_json_encode( $payload );
 		$timestamp = isset( $payload['timestamp'] ) ? (string) $payload['timestamp'] : gmdate( 'c' );
 		$url       = self::get_url();

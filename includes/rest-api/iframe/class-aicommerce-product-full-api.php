@@ -94,7 +94,7 @@ class ProductFullAPI {
                         'description' => __( 'Sort field', 'aicommerce' ),
                         'type'        => 'string',
                         'default'     => 'date',
-                        'enum'        => array( 'date', 'title', 'price', 'popularity', 'rating', 'menu_order' ),
+                        'enum'        => array( 'id', 'date', 'title', 'price', 'popularity', 'rating', 'menu_order' ),
                     ),
                     'order'    => array(
                         'description' => __( 'Sort direction', 'aicommerce' ),
@@ -286,9 +286,11 @@ class ProductFullAPI {
             $query_args['meta_key'] = $meta_orderby_map[ $orderby ];
         } else {
             /** Fall back to a safe native post sort when the requested order key is unsupported. */
-            $query_args['orderby'] = in_array( $orderby, array( 'title', 'menu_order', 'date' ), true )
-                ? $orderby
-                : 'date';
+            $query_args['orderby'] = 'id' === $orderby
+                ? 'ID'
+                : ( in_array( $orderby, array( 'title', 'menu_order', 'date' ), true )
+                    ? $orderby
+                    : 'date' );
         }
 
         /** Execute the paginated product query. */
