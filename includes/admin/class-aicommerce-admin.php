@@ -135,17 +135,19 @@ class Admin {
         if ( 'toplevel_page_aicommerce' !== $hook ) {
             return;
         }
+
+        $suffix = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? '' : '.min';
         
         wp_enqueue_style(
             'aicommerce-admin',
-            AICOMMERCE_PLUGIN_URL . 'assets/css/admin.css',
+            AICOMMERCE_PLUGIN_URL . 'assets/css/admin' . $suffix . '.css',
             array(),
             AICOMMERCE_VERSION
         );
         
         wp_enqueue_script(
             'aicommerce-admin',
-            AICOMMERCE_PLUGIN_URL . 'assets/js/admin.js',
+            AICOMMERCE_PLUGIN_URL . 'assets/js/admin' . $suffix . '.js',
             array(),
             AICOMMERCE_VERSION,
             true

@@ -21,17 +21,26 @@ class ProductAPI {
      * Constructor
      */
     public function __construct() {
+        /** Register REST routes for lightweight product search used by the iframe. */
         add_action( 'rest_api_init', array( $this, 'register_routes' ) );
+
+        /** Clear cached search responses whenever products are edited or updated. */
         add_action( 'save_post_product', array( $this, 'clear_search_cache' ) );
         add_action( 'woocommerce_update_product', array( $this, 'clear_search_cache' ) );
+        add_action( 'woocommerce_product_set_stock', array( $this, 'clear_search_cache' ) );
+        add_action( 'woocommerce_variation_set_stock', array( $this, 'clear_search_cache' ) );
+        add_action( 'woocommerce_product_set_stock_status', array( $this, 'clear_search_cache' ) );
+        add_action( 'woocommerce_variation_set_stock_status', array( $this, 'clear_search_cache' ) );
     }
 
     /**
      * Register REST API routes
      */
     public function register_routes(): void {
+        /** Keep all iframe-facing endpoints under the plugin REST namespace. */
         $namespace = 'aicommerce/v1';
 
+        /** Register the lightweight search endpoint used for product discovery in chat and iframe UI. */
         register_rest_route(
             $namespace,
             '/products/search',
@@ -67,27 +76,45 @@ class ProductAPI {
      * Search products endpoint
      */
     public function search_products( \WP_REST_Request $request ): \WP_REST_Response {
+        $client_id = RateLimiter::get_client_id();
+        if ( ! RateLimiter::is_allowed( 'products_search:' . $client_id, 90, 60 ) ) {
+            return new \WP_REST_Response(
+                array(
+                    'success' => false,
+                    'code'    => 'rate_limited',
+                    'message' => __( 'Too many search requests. Please try again shortly.', 'aicommerce' ),
+                ),
+                429
+            );
+        }
+
+        /** Validate the signed iframe request before reading any catalog data. */
         $validation = APIValidator::validate_request( $request );
         if ( ! $validation['valid'] ) {
             return APIValidator::error_response( $validation );
         }
 
-        $search_query = sanitize_text_field( $request->get_param( 'q' ) );
+        /** Normalize the search and pagination inputs into predictable scalar values. */
+        $search_query = sanitize_text_field( (string) $request->get_param( 'q' ) );
         $per_page     = absint( $request->get_param( 'per_page' ) ) ?: 20;
         $page         = absint( $request->get_param( 'page' ) ) ?: 1;
 
+        /** Empty queries fall back to date-based browsing instead of fuzzy search. */
         if ( empty( trim( $search_query ) ) ) {
             return $this->get_products_by_date( $per_page, $page );
         }
 
-        $cache_key = 'aic_s_' . md5( $search_query . '|' . $page . '|' . $per_page );
+        /** Cache search pages aggressively because iframe searches can repeat frequently. */
+        $cache_key = 'aic_s_instock_' . md5( $search_query . '|' . $page . '|' . $per_page );
         $cached    = get_transient( $cache_key );
         if ( false !== $cached ) {
             return new \WP_REST_Response( $cached, 200 );
         }
 
+        /** Query matching product IDs plus total count using the optimized SQL helper below. */
         list( $paginated_ids, $total ) = $this->query_products( $search_query, $per_page, $page );
 
+        /** Return a stable empty payload when nothing matched the query. */
         if ( empty( $paginated_ids ) ) {
             $data = array(
                 'success'      => true,
@@ -98,10 +125,12 @@ class ProductAPI {
                 'pages'        => 0,
                 'query'        => $search_query,
             );
+            /** Cache empty result pages too so repeated misses stay cheap. */
             set_transient( $cache_key, $data, 30 * MINUTE_IN_SECONDS );
             return new \WP_REST_Response( $data, 200 );
         }
 
+        /** Format the paginated products into the iframe-friendly response shape. */
         $products = $this->format_products_batch( $paginated_ids );
         $pages    = (int) ceil( $total / $per_page );
 
@@ -115,6 +144,7 @@ class ProductAPI {
             'query'        => $search_query,
         );
 
+        /** Cache the assembled response so identical searches avoid repeating SQL and formatting work. */
         set_transient( $cache_key, $data, 30 * MINUTE_IN_SECONDS );
         return new \WP_REST_Response( $data, 200 );
     }
@@ -124,13 +154,16 @@ class ProductAPI {
      * Returns array( $paginated_ids, $total ).
      */
     private function query_products( string $search_query, int $per_page, int $page ): array {
+        /** Use direct SQL here because relevance scoring is easier and cheaper than layered WP_Query calls. */
         global $wpdb;
 
+        /** Build the exact, prefix, and contains patterns reused across title/content/SKU matching. */
         $exact    = $search_query;
         $starts   = $wpdb->esc_like( $search_query ) . '%';
         $contains = '%' . $wpdb->esc_like( $search_query ) . '%';
         $offset   = ( $page - 1 ) * $per_page;
 
+        /** Query the paginated product IDs ordered by a simple relevance score. */
         $results = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT id, SUM(score) AS relevance
@@ -146,6 +179,9 @@ class ProductAPI {
                         + CASE WHEN LEFT(p.post_content, 300) LIKE %s   THEN 10 ELSE 0 END
                         AS score
                     FROM {$wpdb->posts} p
+                    INNER JOIN {$wpdb->postmeta} stock_pm ON p.ID = stock_pm.post_id
+                        AND stock_pm.meta_key = '_stock_status'
+                        AND stock_pm.meta_value = 'instock'
                     WHERE p.post_type = 'product'
                     AND p.post_status = 'publish'
                     AND (
@@ -164,6 +200,9 @@ class ProductAPI {
                         END AS score
                     FROM {$wpdb->posts} p
                     INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+                    INNER JOIN {$wpdb->postmeta} stock_pm ON p.ID = stock_pm.post_id
+                        AND stock_pm.meta_key = '_stock_status'
+                        AND stock_pm.meta_value = 'instock'
                     WHERE p.post_type = 'product'
                     AND p.post_status = 'publish'
                     AND pm.meta_key = '_sku'
@@ -182,13 +221,18 @@ class ProductAPI {
             )
         );
 
+        /** Extract the final product IDs from the relevance query result set. */
         $paginated_ids = array_map( function ( $r ) { return (int) $r->id; }, $results );
 
+        /** Run a second lightweight count query so the response can expose total pages. */
         $total = (int) $wpdb->get_var(
             $wpdb->prepare(
                 "SELECT COUNT(*) FROM (
                     SELECT p.ID
                     FROM {$wpdb->posts} p
+                    INNER JOIN {$wpdb->postmeta} stock_pm ON p.ID = stock_pm.post_id
+                        AND stock_pm.meta_key = '_stock_status'
+                        AND stock_pm.meta_value = 'instock'
                     WHERE p.post_type = 'product'
                     AND p.post_status = 'publish'
                     AND (
@@ -200,6 +244,9 @@ class ProductAPI {
                     SELECT p.ID
                     FROM {$wpdb->posts} p
                     INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+                    INNER JOIN {$wpdb->postmeta} stock_pm ON p.ID = stock_pm.post_id
+                        AND stock_pm.meta_key = '_stock_status'
+                        AND stock_pm.meta_value = 'instock'
                     WHERE p.post_type = 'product'
                     AND p.post_status = 'publish'
                     AND pm.meta_key = '_sku'
@@ -209,6 +256,7 @@ class ProductAPI {
             )
         );
 
+        /** Return both the current page IDs and the global total match count. */
         return array( $paginated_ids, $total );
     }
 
@@ -266,7 +314,7 @@ class ProductAPI {
 
         foreach ( $product_ids as $product_id ) {
             $product = wc_get_product( $product_id ); // 0 DB queries — already in cache
-            if ( ! $product ) {
+            if ( ! $product || ! $product->is_in_stock() ) {
                 continue;
             }
 
@@ -322,6 +370,12 @@ class ProductAPI {
                 'orderby'        => 'date',
                 'order'          => 'DESC',
                 'fields'         => 'ids',
+                'meta_query'     => array(
+                    array(
+                        'key'   => '_stock_status',
+                        'value' => 'instock',
+                    ),
+                ),
             )
         );
 
@@ -346,7 +400,7 @@ class ProductAPI {
     /**
      * Invalidate search cache when a product is saved or updated.
      */
-    public function clear_search_cache(): void {
+    public function clear_search_cache( ...$args ): void {
         global $wpdb;
         $wpdb->query(
             "DELETE FROM {$wpdb->options}
@@ -378,6 +432,7 @@ class ProductAPI {
             'stock_status'   => $product->get_stock_status(),
             'stock_quantity' => $product->get_stock_quantity(),
             'manage_stock'   => $product->get_manage_stock(),
+            'availability'   => ProductAvailability::build_availability_payload( $product ),
             'image'          => array(
                 'id'  => $image_id,
                 'url' => $image_url ?: '',
@@ -408,7 +463,7 @@ class ProductAPI {
 
         foreach ( $variation_ids as $variation_id ) {
             $variation = wc_get_product( $variation_id );
-            if ( ! $variation || ! $variation->is_purchasable() ) {
+            if ( ! $variation || ! $variation->is_purchasable() || ! $variation->is_in_stock() ) {
                 continue;
             }
 
@@ -421,6 +476,7 @@ class ProductAPI {
                 'sale_price'    => $variation->get_sale_price(),
                 'stock_status'  => $variation->get_stock_status(),
                 'sku'           => $variation->get_sku(),
+                'availability'  => ProductAvailability::build_availability_payload( $product, $variation ),
             );
 
             foreach ( $attrs as $key => $value ) {
