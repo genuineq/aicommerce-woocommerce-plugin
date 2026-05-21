@@ -75,6 +75,7 @@ class Updater {
         add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
         add_filter( 'plugins_api', array( $this, 'plugin_info' ), 20, 3 );
         add_filter( 'upgrader_source_selection', array( $this, 'fix_directory_name' ), 10, 4 );
+        add_action( 'upgrader_process_complete', array( $this, 'clear_update_caches' ), 10, 2 );
     }
 
     /**
@@ -181,8 +182,8 @@ class Updater {
 
     /**
      * GitHub releases the ZIP with the repo name as the folder.
-     * This renames the extracted folder to 'aicommerce' so WordPress
-     * replaces the correct directory.
+     * Rename the extracted folder to the currently installed directory
+     * so WordPress replaces the active copy instead of creating a duplicate.
      *
      * @param string      $source        Path to extracted folder.
      * @param string      $remote_source Remote source.
@@ -197,7 +198,12 @@ class Updater {
             return $source;
         }
 
-        $correct_dir = trailingslashit( $remote_source ) . $this->plugin_slug . '/';
+        $installed_dir = dirname( $this->plugin_file );
+        if ( '.' === $installed_dir || '' === $installed_dir ) {
+            $installed_dir = $this->plugin_slug;
+        }
+
+        $correct_dir = trailingslashit( $remote_source ) . trailingslashit( $installed_dir );
 
         if ( $source !== $correct_dir && $wp_filesystem->is_dir( $source ) ) {
             if ( $wp_filesystem->is_dir( $correct_dir ) ) {
@@ -208,6 +214,26 @@ class Updater {
         }
 
         return $source;
+    }
+
+    /**
+     * Clear cached update data after this plugin is updated.
+     *
+     * @param object $upgrader   Upgrader instance.
+     * @param array  $hook_extra Extra hook data.
+     * @return void
+     */
+    public function clear_update_caches( $upgrader, $hook_extra ): void {
+        if ( empty( $hook_extra['plugins'] ) || ! is_array( $hook_extra['plugins'] ) ) {
+            return;
+        }
+
+        if ( ! in_array( $this->plugin_file, $hook_extra['plugins'], true ) ) {
+            return;
+        }
+
+        delete_transient( $this->cache_key );
+        delete_site_transient( 'update_plugins' );
     }
 
     /**
