@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AICommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.5.2
+ * Version: 1.5.3
  * Author: Genuineq
  * Author URI: https://genuineq.com
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.5.2' );
+define( 'AICOMMERCE_VERSION', '1.5.3' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
@@ -29,7 +29,6 @@ define( 'AICOMMERCE_CART_EXPIRATION_OPTION', 'aicommerce_cart_expiration_seconds
 define( 'AICOMMERCE_CART_EXPIRATION_CHECKED_OPTION', 'aicommerce_cart_expiration_checked_at' );
 
 if ( ! defined( 'AICOMMERCE_AUTO_UPDATES' ) ) {
-    define( 'AICOMMERCE_UPDATE_CACHE_TTL', 60 );
     define( 'AICOMMERCE_AUTO_UPDATES', true );
 }
 
