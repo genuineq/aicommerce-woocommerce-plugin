@@ -74,7 +74,6 @@ class Updater {
 
         add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
         add_filter( 'plugins_api', array( $this, 'plugin_info' ), 20, 3 );
-        add_filter( 'upgrader_source_selection', array( $this, 'fix_directory_name' ), 10, 4 );
         add_action( 'upgrader_process_complete', array( $this, 'clear_update_caches' ), 10, 2 );
     }
 
@@ -178,42 +177,6 @@ class Updater {
             'icons'         => isset( $remote->icons )        ? (array) $remote->icons : array(),
             'banners'       => isset( $remote->banners )      ? (array) $remote->banners : array(),
         );
-    }
-
-    /**
-     * GitHub releases the ZIP with the repo name as the folder.
-     * Rename the extracted folder to the currently installed directory
-     * so WordPress replaces the active copy instead of creating a duplicate.
-     *
-     * @param string      $source        Path to extracted folder.
-     * @param string      $remote_source Remote source.
-     * @param object      $upgrader      Upgrader instance.
-     * @param array       $hook_extra    Extra hook data.
-     * @return string
-     */
-    public function fix_directory_name( $source, $remote_source, $upgrader, $hook_extra ) {
-        global $wp_filesystem;
-
-        if ( ! isset( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->plugin_file ) {
-            return $source;
-        }
-
-        $installed_dir = dirname( $this->plugin_file );
-        if ( '.' === $installed_dir || '' === $installed_dir ) {
-            $installed_dir = $this->plugin_slug;
-        }
-
-        $correct_dir = trailingslashit( $remote_source ) . trailingslashit( $installed_dir );
-
-        if ( $source !== $correct_dir && $wp_filesystem->is_dir( $source ) ) {
-            if ( $wp_filesystem->is_dir( $correct_dir ) ) {
-                $wp_filesystem->delete( $correct_dir, true );
-            }
-            $wp_filesystem->move( $source, $correct_dir );
-            return $correct_dir;
-        }
-
-        return $source;
     }
 
     /**
