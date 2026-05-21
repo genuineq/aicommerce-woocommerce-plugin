@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AICommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.4.9
+ * Version: 1.5.0
  * Author: Genuineq
  * Author URI: https://genuineq.com
  * License: GPL v2 or later
@@ -21,12 +21,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.4.9' );
+define( 'AICOMMERCE_VERSION', '1.5.0' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
 define( 'AICOMMERCE_CART_EXPIRATION_OPTION', 'aicommerce_cart_expiration_seconds' );
 define( 'AICOMMERCE_CART_EXPIRATION_CHECKED_OPTION', 'aicommerce_cart_expiration_checked_at' );
+
+if ( ! defined( 'AICOMMERCE_AUTO_UPDATES' ) ) {
+    define( 'AICOMMERCE_AUTO_UPDATES', true );
+}
 
 /**
  * Main AICommerce Class
@@ -64,6 +68,9 @@ class AICommerce {
 
         // Add deactivation hook
         register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
+
+        // Register updater early so WordPress update checks can discover new versions.
+        add_action( 'plugins_loaded', array( $this, 'load_updater' ), 1 );
 
         // Declare WooCommerce compatibility
         add_action( 'before_woocommerce_init', array( $this, 'declare_woocommerce_compatibility' ) );
@@ -210,6 +217,23 @@ class AICommerce {
             </p>
         </div>
         <?php
+    }
+
+    /**
+     * Load the plugin updater in wp-admin and scheduled update checks.
+     */
+    public function load_updater(): void {
+        $is_cron = defined( 'DOING_CRON' ) && DOING_CRON;
+
+        if ( ! is_admin() && ! $is_cron ) {
+            return;
+        }
+
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/core/security/class-aicommerce-encryption.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/core/config/class-aicommerce-settings.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/infrastructure/class-aicommerce-updater.php';
+
+        new \AICommerce\Updater();
     }
 
     /**
@@ -612,12 +636,6 @@ class AICommerce {
 
         if ( $needs_webhook_support ) {
             require_once AICOMMERCE_PLUGIN_DIR . 'includes/webhooks/class-aicommerce-webhook-delivery-log.php';
-        }
-
-        // Updater is relevant in wp-admin and scheduled update checks.
-        if ( is_admin() || $is_cron ) {
-            require_once AICOMMERCE_PLUGIN_DIR . 'includes/infrastructure/class-aicommerce-updater.php';
-            new \AICommerce\Updater();
         }
 
         // Product webhooks are relevant anywhere WooCommerce can mutate products or stock.

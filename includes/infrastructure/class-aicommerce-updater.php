@@ -31,9 +31,19 @@ class Updater {
     private string $plugin_slug = 'aicommerce';
 
     /**
-     * Remote info.json URL
+     * Production remote info.json URL.
      */
-    private string $update_url = 'https://api.ai.genuineq.com/woocommerce/info.json';
+    private const UPDATE_URL = 'https://api.ai.genuineq.com/woocommerce/info.json';
+
+    /**
+     * Staging remote info.json URL.
+     */
+    private const UPDATE_URL_STAGING = 'https://api.ai.staging.genuineq.com/woocommerce/info.json';
+
+    /**
+     * Remote info.json URL.
+     */
+    private string $update_url;
 
     /**
      * Current plugin version
@@ -48,13 +58,9 @@ class Updater {
     /**
      * Constructor
      *
-     * Auto-updates are only enabled when AICOMMERCE_AUTO_UPDATES is defined
-     * and set to true in wp-config.php. This prevents updates from being
-     * pushed to client sites — only the staging/test site should have this
-     * constant defined.
-     *
-     * Add to your staging wp-config.php:
-     *   define( 'AICOMMERCE_AUTO_UPDATES', true );
+     * Auto-updates are enabled when AICOMMERCE_AUTO_UPDATES is true.
+     * The plugin defines it as true by default, while wp-config.php can
+     * override it with false for sites that should not receive updates.
      */
     public function __construct() {
         if ( ! defined( 'AICOMMERCE_AUTO_UPDATES' ) || ! AICOMMERCE_AUTO_UPDATES ) {
@@ -63,10 +69,26 @@ class Updater {
 
         $this->plugin_file = plugin_basename( AICOMMERCE_PLUGIN_FILE );
         $this->version     = AICOMMERCE_VERSION;
+        $this->update_url  = $this->resolve_update_url();
+        $this->cache_key   = 'aicommerce_update_info_' . md5( $this->update_url );
 
         add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
         add_filter( 'plugins_api', array( $this, 'plugin_info' ), 20, 3 );
         add_filter( 'upgrader_source_selection', array( $this, 'fix_directory_name' ), 10, 4 );
+        add_action( 'upgrader_process_complete', array( $this, 'clear_update_caches' ), 10, 2 );
+    }
+
+    /**
+     * Resolve the updater endpoint for the current API key environment.
+     *
+     * @return string Production or staging info.json URL.
+     */
+    private function resolve_update_url(): string {
+        $api_key = Settings::get_api_key();
+
+        return ( ! empty( $api_key ) && 0 === strpos( $api_key, 'staging_' ) )
+            ? self::UPDATE_URL_STAGING
+            : self::UPDATE_URL;
     }
 
     /**
@@ -160,8 +182,8 @@ class Updater {
 
     /**
      * GitHub releases the ZIP with the repo name as the folder.
-     * This renames the extracted folder to 'aicommerce' so WordPress
-     * replaces the correct directory.
+     * Rename the extracted folder to the currently installed directory
+     * so WordPress replaces the active copy instead of creating a duplicate.
      *
      * @param string      $source        Path to extracted folder.
      * @param string      $remote_source Remote source.
@@ -176,7 +198,12 @@ class Updater {
             return $source;
         }
 
-        $correct_dir = trailingslashit( $remote_source ) . $this->plugin_slug . '/';
+        $installed_dir = dirname( $this->plugin_file );
+        if ( '.' === $installed_dir || '' === $installed_dir ) {
+            $installed_dir = $this->plugin_slug;
+        }
+
+        $correct_dir = trailingslashit( $remote_source ) . trailingslashit( $installed_dir );
 
         if ( $source !== $correct_dir && $wp_filesystem->is_dir( $source ) ) {
             if ( $wp_filesystem->is_dir( $correct_dir ) ) {
@@ -187,6 +214,26 @@ class Updater {
         }
 
         return $source;
+    }
+
+    /**
+     * Clear cached update data after this plugin is updated.
+     *
+     * @param object $upgrader   Upgrader instance.
+     * @param array  $hook_extra Extra hook data.
+     * @return void
+     */
+    public function clear_update_caches( $upgrader, $hook_extra ): void {
+        if ( empty( $hook_extra['plugins'] ) || ! is_array( $hook_extra['plugins'] ) ) {
+            return;
+        }
+
+        if ( ! in_array( $this->plugin_file, $hook_extra['plugins'], true ) ) {
+            return;
+        }
+
+        delete_transient( $this->cache_key );
+        delete_site_transient( 'update_plugins' );
     }
 
     /**
