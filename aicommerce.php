@@ -29,6 +29,7 @@ define( 'AICOMMERCE_CART_EXPIRATION_OPTION', 'aicommerce_cart_expiration_seconds
 define( 'AICOMMERCE_CART_EXPIRATION_CHECKED_OPTION', 'aicommerce_cart_expiration_checked_at' );
 
 if ( ! defined( 'AICOMMERCE_AUTO_UPDATES' ) ) {
+    define( 'AICOMMERCE_UPDATE_CACHE_TTL', 60 );
     define( 'AICOMMERCE_AUTO_UPDATES', true );
 }
 

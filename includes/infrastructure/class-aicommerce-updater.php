@@ -243,8 +243,25 @@ class Updater {
             return null;
         }
 
-        set_transient( $this->cache_key, $data, 12 * HOUR_IN_SECONDS );
+        set_transient( $this->cache_key, $data, $this->get_cache_ttl() );
 
         return $data;
+    }
+
+    /**
+     * Get the remote update info cache TTL.
+     *
+     * @return int Cache lifetime in seconds.
+     */
+    private function get_cache_ttl(): int {
+        if ( defined( 'AICOMMERCE_UPDATE_CACHE_TTL' ) ) {
+            return max( 0, (int) AICOMMERCE_UPDATE_CACHE_TTL );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            return MINUTE_IN_SECONDS;
+        }
+
+        return 12 * HOUR_IN_SECONDS;
     }
 }
