@@ -187,11 +187,21 @@ class Updater {
      * @return void
      */
     public function clear_update_caches( $upgrader, $hook_extra ): void {
-        if ( empty( $hook_extra['plugins'] ) || ! is_array( $hook_extra['plugins'] ) ) {
+        $updated_plugins = array();
+
+        if ( ! empty( $hook_extra['plugin'] ) && is_string( $hook_extra['plugin'] ) ) {
+            $updated_plugins[] = $hook_extra['plugin'];
+        }
+
+        if ( ! empty( $hook_extra['plugins'] ) && is_array( $hook_extra['plugins'] ) ) {
+            $updated_plugins = array_merge( $updated_plugins, $hook_extra['plugins'] );
+        }
+
+        if ( empty( $updated_plugins ) ) {
             return;
         }
 
-        if ( ! in_array( $this->plugin_file, $hook_extra['plugins'], true ) ) {
+        if ( ! in_array( $this->plugin_file, $updated_plugins, true ) ) {
             return;
         }
 
