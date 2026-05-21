@@ -28,6 +28,10 @@ define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
 define( 'AICOMMERCE_CART_EXPIRATION_OPTION', 'aicommerce_cart_expiration_seconds' );
 define( 'AICOMMERCE_CART_EXPIRATION_CHECKED_OPTION', 'aicommerce_cart_expiration_checked_at' );
 
+if ( ! defined( 'AICOMMERCE_AUTO_UPDATES' ) ) {
+    define( 'AICOMMERCE_AUTO_UPDATES', true );
+}
+
 /**
  * Main AICommerce Class
  */

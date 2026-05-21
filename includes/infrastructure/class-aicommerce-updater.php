@@ -31,9 +31,19 @@ class Updater {
     private string $plugin_slug = 'aicommerce';
 
     /**
-     * Remote info.json URL
+     * Production remote info.json URL.
      */
-    private string $update_url = 'https://api.ai.genuineq.com/woocommerce/info.json';
+    private const UPDATE_URL = 'https://api.ai.genuineq.com/woocommerce/info.json';
+
+    /**
+     * Staging remote info.json URL.
+     */
+    private const UPDATE_URL_STAGING = 'https://api.ai.staging.genuineq.com/woocommerce/info.json';
+
+    /**
+     * Remote info.json URL.
+     */
+    private string $update_url;
 
     /**
      * Current plugin version
@@ -48,13 +58,9 @@ class Updater {
     /**
      * Constructor
      *
-     * Auto-updates are only enabled when AICOMMERCE_AUTO_UPDATES is defined
-     * and set to true in wp-config.php. This prevents updates from being
-     * pushed to client sites — only the staging/test site should have this
-     * constant defined.
-     *
-     * Add to your staging wp-config.php:
-     *   define( 'AICOMMERCE_AUTO_UPDATES', true );
+     * Auto-updates are enabled when AICOMMERCE_AUTO_UPDATES is true.
+     * The plugin defines it as true by default, while wp-config.php can
+     * override it with false for sites that should not receive updates.
      */
     public function __construct() {
         if ( ! defined( 'AICOMMERCE_AUTO_UPDATES' ) || ! AICOMMERCE_AUTO_UPDATES ) {
@@ -63,10 +69,25 @@ class Updater {
 
         $this->plugin_file = plugin_basename( AICOMMERCE_PLUGIN_FILE );
         $this->version     = AICOMMERCE_VERSION;
+        $this->update_url  = $this->resolve_update_url();
+        $this->cache_key   = 'aicommerce_update_info_' . md5( $this->update_url );
 
         add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
         add_filter( 'plugins_api', array( $this, 'plugin_info' ), 20, 3 );
         add_filter( 'upgrader_source_selection', array( $this, 'fix_directory_name' ), 10, 4 );
+    }
+
+    /**
+     * Resolve the updater endpoint for the current API key environment.
+     *
+     * @return string Production or staging info.json URL.
+     */
+    private function resolve_update_url(): string {
+        $api_key = Settings::get_api_key();
+
+        return ( ! empty( $api_key ) && 0 === strpos( $api_key, 'staging_' ) )
+            ? self::UPDATE_URL_STAGING
+            : self::UPDATE_URL;
     }
 
     /**
