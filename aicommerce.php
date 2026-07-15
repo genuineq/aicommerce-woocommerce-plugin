@@ -603,13 +603,13 @@ class AICommerce {
     private function load_rest_api() {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-product-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-product-full-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-user-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-cart-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-tracking-api.php';
 
         new \AICommerce\ProductAPI();
         new \AICommerce\ProductFullAPI();
-        new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
+        new \AICommerce\TrackingAPI();
     }
 
     /**

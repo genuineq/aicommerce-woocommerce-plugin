@@ -72,14 +72,14 @@ class RateLimiter {
      * Get client IP address
      */
     public static function get_client_ip(): string {
-        $ip = '';
-        
-        if ( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
-            $ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
-        } elseif ( isset( $_SERVER['HTTP_CLIENT_IP'] ) ) {
-            $ip = $_SERVER['HTTP_CLIENT_IP'];
-        } elseif ( isset( $_SERVER['REMOTE_ADDR'] ) ) {
-            $ip = $_SERVER['REMOTE_ADDR'];
+        $ip = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '';
+
+        if ( self::is_trusted_proxy_request( $ip ) ) {
+            if ( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
+                $ip = sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_FORWARDED_FOR'] ) );
+            } elseif ( isset( $_SERVER['HTTP_CLIENT_IP'] ) ) {
+                $ip = sanitize_text_field( wp_unslash( $_SERVER['HTTP_CLIENT_IP'] ) );
+            }
         }
         
         if ( strpos( $ip, ',' ) !== false ) {
@@ -87,6 +87,28 @@ class RateLimiter {
             $ip = trim( $ips[0] );
         }
         
-        return $ip;
+        return filter_var( $ip, FILTER_VALIDATE_IP ) ? $ip : 'unknown';
+    }
+
+    /**
+     * Check whether forwarded headers should be trusted for this request.
+     *
+     * @param string $remote_addr Direct client/proxy IP from REMOTE_ADDR.
+     * @return bool True when forwarded headers may be used.
+     */
+    private static function is_trusted_proxy_request( string $remote_addr ): bool {
+        $trusted_proxies = apply_filters( 'aicommerce_trusted_proxy_ips', array() );
+
+        if ( empty( $trusted_proxies ) || empty( $remote_addr ) ) {
+            return false;
+        }
+
+        foreach ( (array) $trusted_proxies as $trusted_proxy ) {
+            if ( hash_equals( (string) $trusted_proxy, $remote_addr ) ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -102,7 +102,7 @@ class Admin {
             'aicommerce_iframe_position',
             array(
                 'type'              => 'string',
-                'sanitize_callback' => 'sanitize_text_field',
+                'sanitize_callback' => array( $this, 'sanitize_iframe_position' ),
                 'default'           => 'bottom-right',
             )
         );
@@ -122,9 +122,51 @@ class Admin {
             'aicommerce_iframe_button_label',
             array(
                 'type'              => 'string',
-                'sanitize_callback' => 'sanitize_text_field',
+                'sanitize_callback' => array( $this, 'sanitize_iframe_button_label' ),
                 'default'           => '',
             )
+        );
+    }
+
+    /**
+     * Sanitize iframe button position.
+     *
+     * @param mixed $value Raw option value.
+     * @return string Safe position value.
+     */
+    public function sanitize_iframe_position( $value ): string {
+        $position = sanitize_text_field( (string) $value );
+
+        return in_array( $position, $this->get_allowed_iframe_positions(), true ) ? $position : 'bottom-right';
+    }
+
+    /**
+     * Sanitize iframe button label.
+     *
+     * @param mixed $value Raw option value.
+     * @return string Safe label value.
+     */
+    public function sanitize_iframe_button_label( $value ): string {
+        $label = sanitize_text_field( (string) $value );
+
+        return strlen( $label ) > 60 ? substr( $label, 0, 60 ) : $label;
+    }
+
+    /**
+     * Get allowed iframe button positions.
+     *
+     * @return array<int,string>
+     */
+    private function get_allowed_iframe_positions(): array {
+        return array(
+            'top-left',
+            'top-center',
+            'top-right',
+            'middle-left',
+            'middle-right',
+            'bottom-left',
+            'bottom-center',
+            'bottom-right',
         );
     }
     
@@ -191,9 +233,9 @@ class Admin {
             check_admin_referer( 'aicommerce_iframe_settings_nonce' );
             
             $iframe_enabled = isset( $_POST['aicommerce_iframe_enabled'] ) ? 1 : 0;
-            $iframe_position = sanitize_text_field( $_POST['aicommerce_iframe_position'] ?? 'bottom-right' );
+            $iframe_position = $this->sanitize_iframe_position( $_POST['aicommerce_iframe_position'] ?? 'bottom-right' );
             $iframe_button_color = sanitize_hex_color( $_POST['aicommerce_iframe_button_color'] ?? '#0073aa' );
-            $iframe_button_label = sanitize_text_field( $_POST['aicommerce_iframe_button_label'] ?? '' );
+            $iframe_button_label = $this->sanitize_iframe_button_label( $_POST['aicommerce_iframe_button_label'] ?? '' );
 
             update_option( 'aicommerce_iframe_enabled', $iframe_enabled );
             update_option( 'aicommerce_iframe_position', $iframe_position );

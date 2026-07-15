@@ -75,6 +75,14 @@ class Iframe {
 			$params['s'] = $api_key;
 		}
 
+		/** Include current storefront context when available. */
+		$params['p'] = $this->get_current_page_url();
+
+		$visit_id = $this->get_visit_id_from_cookie();
+		if ( ! empty( $visit_id ) ) {
+			$params['v'] = $visit_id;
+		}
+
 		/** Use customer ID for authenticated users. */
 		if ( is_user_logged_in() ) {
 			/** Authenticated users do not need a guest token. */
@@ -95,6 +103,32 @@ class Iframe {
 
 		/** Build the final iframe URL with query string. */
 		return $base_url . '?' . http_build_query( $params );
+	}
+
+	/**
+	 * Return the current storefront page URL.
+	 *
+	 * @return string Current page URL.
+	 */
+	private function get_current_page_url(): string {
+		$scheme      = is_ssl() ? 'https://' : 'http://';
+		$host        = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '';
+		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
+
+		return esc_url_raw( $scheme . $host . $request_uri );
+	}
+
+	/**
+	 * Return the active visit ID from the browser cookie when available.
+	 *
+	 * @return string Visit ID or empty string.
+	 */
+	private function get_visit_id_from_cookie(): string {
+		$visit_id = isset( $_COOKIE['visit_id'] )
+			? sanitize_text_field( wp_unslash( $_COOKIE['visit_id'] ) )
+			: '';
+
+		return preg_match( '/^\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $visit_id ) ? $visit_id : '';
 	}
 
 	/**
@@ -169,7 +203,19 @@ class Iframe {
 	 */
 	private function get_button_position(): string {
 		/** Read configured iframe button position. */
-		return get_option( 'aicommerce_iframe_position', 'bottom-right' );
+		$position = sanitize_text_field( (string) get_option( 'aicommerce_iframe_position', 'bottom-right' ) );
+		$allowed  = array(
+			'top-left',
+			'top-center',
+			'top-right',
+			'middle-left',
+			'middle-right',
+			'bottom-left',
+			'bottom-center',
+			'bottom-right',
+		);
+
+		return in_array( $position, $allowed, true ) ? $position : 'bottom-right';
 	}
 
 	/**
@@ -189,7 +235,9 @@ class Iframe {
 	 */
 	private function get_button_label(): string {
 		/** Read configured iframe button label. */
-		return get_option( 'aicommerce_iframe_button_label', '' );
+		$label = sanitize_text_field( (string) get_option( 'aicommerce_iframe_button_label', '' ) );
+
+		return strlen( $label ) > 60 ? substr( $label, 0, 60 ) : $label;
 	}
 
 	/**
@@ -213,8 +261,8 @@ class Iframe {
 		wp_enqueue_script(
 			'aicommerce-iframe',
 			AICOMMERCE_PLUGIN_URL . 'assets/js/iframe.js',
-			array( 'aicommerce-guest-token' ),
-			AICOMMERCE_VERSION,
+			array( 'aicommerce-guest-token', 'aicommerce-tracking-token' ),
+			(string) filemtime( AICOMMERCE_PLUGIN_DIR . 'assets/js/iframe.js' ),
 			true
 		);
 

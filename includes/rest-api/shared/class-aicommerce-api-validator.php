@@ -159,11 +159,6 @@ class APIValidator {
                 'valid'   => false,
                 'code'    => 'invalid_signature',
                 'message' => __( 'Invalid request signature.', 'aicommerce' ),
-                'debug'   => defined( 'WP_DEBUG' ) && WP_DEBUG ? array(
-                    'expected_original'   => $expected_signature_original,
-                    'expected_normalized' => $expected_signature_normalized,
-                    'received'            => $signature,
-                ) : null,
             );
         }
         

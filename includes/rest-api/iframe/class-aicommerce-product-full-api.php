@@ -19,6 +19,9 @@ if ( ! defined( 'ABSPATH' ) ) {
  * ProductFullAPI Class
  */
 class ProductFullAPI {
+    /** Product API cache schema version. */
+    private const CACHE_VERSION = 'v2';
+
 
     /**
      * Constructor
@@ -123,7 +126,7 @@ class ProductFullAPI {
         $variation_id = 0;
 
         /** Cache complete single-product payloads because they are relatively expensive to assemble. */
-        $cache_key = 'aic_p_single_instock_' . $requested_id;
+        $cache_key = 'aic_p_' . self::CACHE_VERSION . '_single_instock_' . $requested_id;
         $cached    = get_transient( $cache_key );
         if ( false !== $cached ) {
             return new \WP_REST_Response( $cached, 200 );
@@ -223,7 +226,7 @@ class ProductFullAPI {
         $order    = strtoupper( sanitize_text_field( (string) $request->get_param( 'order' ) ) );
 
         /** Cache full listing pages because their formatting cost is materially higher than lightweight search. */
-        $cache_key = 'aic_p_instock_' . md5( $page . '|' . $per_page . '|' . $orderby . '|' . $order );
+        $cache_key = 'aic_p_' . self::CACHE_VERSION . '_instock_' . md5( $page . '|' . $per_page . '|' . $orderby . '|' . $order );
         $cached    = get_transient( $cache_key );
         if ( false !== $cached ) {
             return new \WP_REST_Response( $cached, 200 );
@@ -570,20 +573,21 @@ class ProductFullAPI {
                 $downloads_data[] = array(
                     'id'   => $download->get_id(),
                     'name' => $download->get_name(),
-                    'file' => $download->get_file(),
                 );
             }
         }
 
-        // ── Custom meta (non-WC-internal keys only) ───────────────────────────
+        // ── Public product meta useful for catalog/search context ─────────────
         $meta_data = array();
         foreach ( $product->get_meta_data() as $meta ) {
             $entry = $meta->get_data();
-            // Expose only public meta (keys not starting with underscore)
-            if ( isset( $entry['key'] ) && strpos( $entry['key'], '_' ) !== 0 ) {
+
+            if ( isset( $entry['key'] ) && $this->is_allowed_product_meta_key( (string) $entry['key'] ) ) {
+                $value = $this->normalize_product_meta_value( $entry['value'] ?? '' );
+
                 $meta_data[] = array(
                     'key'   => $entry['key'],
-                    'value' => $entry['value'],
+                    'value' => $value,
                 );
             }
         }
@@ -681,11 +685,71 @@ class ProductFullAPI {
     }
 
     /**
+     * Allow only product metadata that is useful for public catalog context.
+     *
+     * @param string $key Product meta key.
+     * @return bool True when the meta key is safe to expose.
+     */
+    private function is_allowed_product_meta_key( string $key ): bool {
+        $allowed_meta_keys = array(
+            'brand',
+            'manufacturer',
+            'material',
+            'color',
+            'size',
+            'condition',
+            'gtin',
+            'ean',
+            'upc',
+            'isbn',
+            'mpn',
+            'model',
+            'part_number',
+            'product_code',
+            'specifications',
+            'features',
+        );
+
+        /**
+         * Let stores add explicitly public catalog fields without exposing every
+         * non-underscored product meta key.
+         */
+        $allowed_meta_keys = apply_filters( 'aicommerce_allowed_product_meta_keys', $allowed_meta_keys );
+
+        return in_array( sanitize_key( $key ), array_map( 'sanitize_key', (array) $allowed_meta_keys ), true );
+    }
+
+    /**
+     * Normalize public product meta values before exposing them through the API.
+     *
+     * @param mixed $value Raw meta value.
+     * @return mixed Normalized scalar value.
+     */
+    private function normalize_product_meta_value( $value ) {
+        if ( is_bool( $value ) || is_int( $value ) || is_float( $value ) ) {
+            return $value;
+        }
+
+        if ( is_array( $value ) ) {
+            $value = wp_json_encode( $value );
+        }
+
+        if ( is_object( $value ) ) {
+            $value = method_exists( $value, '__toString' ) ? (string) $value : '';
+        }
+
+        $value = sanitize_textarea_field( (string) $value );
+
+        return strlen( $value ) > 1000 ? substr( $value, 0, 1000 ) : $value;
+    }
+
+    /**
      * Invalidate single product cache when that product is saved.
      *
      * @param int $product_id
      */
     public function clear_single_product_cache( int $product_id ): void {
+        delete_transient( 'aic_p_' . self::CACHE_VERSION . '_single_instock_' . $product_id );
         delete_transient( 'aic_p_single_instock_' . $product_id );
         delete_transient( 'aic_p_single_' . $product_id );
     }

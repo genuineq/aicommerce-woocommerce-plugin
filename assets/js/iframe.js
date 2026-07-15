@@ -76,6 +76,13 @@
 
         try {
             const parsed = new URL(url, window.location.href);
+            const visitId = typeof getAicommerceVisitId === 'function' ? getAicommerceVisitId() : '';
+
+            if (visitId) {
+                parsed.searchParams.set('v', visitId);
+            }
+
+            parsed.searchParams.set('p', window.location.href);
 
             if (settings.logged_in && settings.user_id) {
                 parsed.searchParams.set('c', String(settings.user_id));
