@@ -34,7 +34,6 @@ class CartAPI {
         return array(
             'identifier'  => ! empty( $guest_token ) ? 'guest' : 'user',
             'guest_token' => ! empty( $guest_token ) ? $guest_token : '',
-            'storage_key' => ! empty( $guest_token ) ? CartStorage::get_guest_cart_option_name( $guest_token ) : '',
             'user_id'     => ! empty( $user_id ) ? (int) $user_id : 0,
         );
     }

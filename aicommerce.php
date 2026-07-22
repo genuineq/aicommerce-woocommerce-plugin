@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AICommerce
  * Description: AI-powered commerce plugin for WooCommerce
- * Version: 1.5.2
+ * Version: 1.5.3
  * Author: Genuineq
  * Author URI: https://genuineq.com
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants
-define( 'AICOMMERCE_VERSION', '1.5.2' );
+define( 'AICOMMERCE_VERSION', '1.5.3' );
 define( 'AICOMMERCE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'AICOMMERCE_PLUGIN_FILE', __FILE__ );
@@ -603,13 +603,13 @@ class AICommerce {
     private function load_rest_api() {
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-product-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-product-full-api.php';
-        require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-user-api.php';
         require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-cart-api.php';
+        require_once AICOMMERCE_PLUGIN_DIR . 'includes/rest-api/iframe/class-aicommerce-tracking-api.php';
 
         new \AICommerce\ProductAPI();
         new \AICommerce\ProductFullAPI();
-        new \AICommerce\UserAPI();
         new \AICommerce\CartAPI();
+        new \AICommerce\TrackingAPI();
     }
 
     /**

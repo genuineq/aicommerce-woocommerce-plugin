@@ -22,6 +22,9 @@ class GuestToken {
     /** Guest token cookie name. */
     private const COOKIE_NAME = 'aicommerce_guest_token';
 
+    /** Browser-scoped cart token cookie name for logged-in users. */
+    private const USER_CART_TOKEN_COOKIE = 'aicommerce_user_cart_token';
+
     /** Cookie lifetime duration. */
     private const COOKIE_EXPIRATION = YEAR_IN_SECONDS;
 
@@ -160,6 +163,71 @@ class GuestToken {
     }
 
     /**
+     * Return a browser-scoped cart token for logged-in tracking identity.
+     *
+     * @return string User cart token or empty string.
+     */
+    private function get_user_cart_token(): string {
+        if ( ! is_user_logged_in() ) {
+            return '';
+        }
+
+        $user_id = (int) get_current_user_id();
+        $token   = isset( $_COOKIE[ self::USER_CART_TOKEN_COOKIE ] )
+            ? sanitize_text_field( wp_unslash( $_COOKIE[ self::USER_CART_TOKEN_COOKIE ] ) )
+            : '';
+
+        if ( $this->is_valid_user_cart_token( $token, $user_id ) ) {
+            return $token;
+        }
+
+        $token = wp_generate_password( 48, false, false );
+        set_transient( $this->get_user_cart_token_key( $token ), $user_id, DAY_IN_SECONDS );
+
+        $options = array(
+            'expires'  => time() + DAY_IN_SECONDS,
+            'path'     => '/',
+            'secure'   => is_ssl(),
+            'httponly' => true,
+            'samesite' => 'Lax',
+        );
+
+        if ( defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ) {
+            $options['domain'] = COOKIE_DOMAIN;
+        }
+
+        setcookie( self::USER_CART_TOKEN_COOKIE, $token, $options );
+        $_COOKIE[ self::USER_CART_TOKEN_COOKIE ] = $token;
+
+        return $token;
+    }
+
+    /**
+     * Validate a logged-in user cart token.
+     *
+     * @param string $token   Token.
+     * @param int    $user_id User ID.
+     * @return bool True when token belongs to the user.
+     */
+    private function is_valid_user_cart_token( string $token, int $user_id ): bool {
+        if ( '' === $token || $user_id <= 0 ) {
+            return false;
+        }
+
+        return $user_id === (int) get_transient( $this->get_user_cart_token_key( $token ) );
+    }
+
+    /**
+     * Build transient key for logged-in user cart token.
+     *
+     * @param string $token Token.
+     * @return string Transient key.
+     */
+    private function get_user_cart_token_key( string $token ): string {
+        return 'aicommerce_user_cart_token_' . hash( 'sha256', $token );
+    }
+
+    /**
      * Set guest token cookie if needed.
      *
      * If a valid guest_token is passed through the URL parameter, it takes precedence
@@ -236,6 +304,15 @@ class GuestToken {
             true
         );
 
+        /** Enqueue short-lived visit tracking token script. */
+        wp_enqueue_script(
+            'aicommerce-tracking-token',
+            AICOMMERCE_PLUGIN_URL . 'assets/js/tracking-token.js',
+            array( 'aicommerce-guest-token' ),
+            (string) filemtime( AICOMMERCE_PLUGIN_DIR . 'assets/js/tracking-token.js' ),
+            true
+        );
+
         wp_localize_script(
             'aicommerce-guest-token',
             'aicommerceGuestTokenConfig',
@@ -244,9 +321,24 @@ class GuestToken {
             )
         );
 
-        /** Use deferred loading when supported by WordPress. */
+        wp_localize_script(
+            'aicommerce-tracking-token',
+            'aicommerceTrackingTokenConfig',
+            array(
+                'logged_in'  => is_user_logged_in(),
+                'user_id'    => is_user_logged_in() ? (int) get_current_user_id() : 0,
+                'cart_token' => is_user_logged_in() ? $this->get_user_cart_token() : '',
+                'nonce'      => wp_create_nonce( 'aicommerce_tracking' ),
+                'endpoints' => array(
+                    'new_session' => esc_url_raw( rest_url( 'aicommerce/v1/tracking/new-session' ) ),
+                    'chat_opened' => esc_url_raw( rest_url( 'aicommerce/v1/tracking/chat-opened' ) ),
+                ),
+            )
+        );
+
+        /** Tracking can be deferred; the guest helper must run before the widget runtime. */
         if ( function_exists( 'wp_script_add_data' ) ) {
-            wp_script_add_data( 'aicommerce-guest-token', 'strategy', 'defer' );
+            wp_script_add_data( 'aicommerce-tracking-token', 'strategy', 'defer' );
         }
     }
 
@@ -256,10 +348,10 @@ class GuestToken {
      * @return string Guest token.
      */
     public static function get_token(): string {
-        /** Instantiate helper to reuse cookie accessor logic. */
-        $instance = new self();
+        $token = isset( $_COOKIE[ self::COOKIE_NAME ] )
+            ? sanitize_text_field( wp_unslash( $_COOKIE[ self::COOKIE_NAME ] ) )
+            : '';
 
-        /** Return guest token from cookie. */
-        return $instance->get_token_from_cookie();
+        return preg_match( '/^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $token ) ? $token : '';
     }
 }
