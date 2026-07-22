@@ -336,9 +336,8 @@ class GuestToken {
             )
         );
 
-        /** Use deferred loading when supported by WordPress. */
+        /** Tracking can be deferred; the guest helper must run before the widget runtime. */
         if ( function_exists( 'wp_script_add_data' ) ) {
-            wp_script_add_data( 'aicommerce-guest-token', 'strategy', 'defer' );
             wp_script_add_data( 'aicommerce-tracking-token', 'strategy', 'defer' );
         }
     }
@@ -349,10 +348,10 @@ class GuestToken {
      * @return string Guest token.
      */
     public static function get_token(): string {
-        /** Instantiate helper to reuse cookie accessor logic. */
-        $instance = new self();
+        $token = isset( $_COOKIE[ self::COOKIE_NAME ] )
+            ? sanitize_text_field( wp_unslash( $_COOKIE[ self::COOKIE_NAME ] ) )
+            : '';
 
-        /** Return guest token from cookie. */
-        return $instance->get_token_from_cookie();
+        return preg_match( '/^guest_\d+_[a-zA-Z0-9]+_[a-f0-9]{8}$/', $token ) ? $token : '';
     }
 }

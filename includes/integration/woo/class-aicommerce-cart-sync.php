@@ -47,8 +47,8 @@ class CartSync {
 
 		/** Load on Woo pages and anywhere the iframe popup can be opened. */
 		$is_wc_context   = function_exists( 'is_woocommerce' ) && ( is_woocommerce() || is_cart() || is_checkout() || is_account_page() );
-		$iframe_enabled  = (bool) get_option( 'aicommerce_iframe_enabled', false );
-		$default_enqueue = ( $is_wc_context || $iframe_enabled );
+		$widget_available = '' !== trim( Settings::get_api_key() );
+		$default_enqueue  = ( $is_wc_context || $widget_available );
 		$should_enqueue  = apply_filters( 'aicommerce_should_enqueue_cart_sync', $default_enqueue );
 
 		if ( ! $should_enqueue ) {
@@ -72,7 +72,7 @@ class CartSync {
 			'aicommerceCartSyncConfig',
 			array(
 				/** Auto-sync immediately where the iframe can restore a guest cart into WooCommerce. */
-				'auto_sync_on_load' => (bool) ( is_cart() || is_checkout() || $iframe_enabled ),
+				'auto_sync_on_load' => (bool) ( is_cart() || is_checkout() || $widget_available ),
 				'logged_in'         => is_user_logged_in(),
 				'user_id'           => is_user_logged_in() ? (int) get_current_user_id() : 0,
 				'cart_token'        => is_user_logged_in() ? $this->get_user_cart_token() : '',
