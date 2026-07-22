@@ -18,12 +18,10 @@
     const SYNC_COOLDOWN_MS = 3500;
     const RETRY_DELAY_MS = 1500;
     const MAX_RETRIES = 1;
-    const CART_PAGE_RELOAD_DELAY_MS = 250;
 
     let isSyncing = false;
     let lastSyncAt = 0;
     let lastResumeSyncAt = 0;
-    let cartPageReloadTimer = null;
 
     const cfg = (typeof aicommerceCartSyncConfig !== 'undefined' && aicommerceCartSyncConfig)
         ? aicommerceCartSyncConfig
@@ -67,11 +65,6 @@
     function isCheckoutPage() {
         if (document.body && document.body.classList.contains('woocommerce-checkout')) return true;
         return !!document.querySelector('form.checkout');
-    }
-
-    function isCartPage() {
-        if (document.body && document.body.classList.contains('woocommerce-cart')) return true;
-        return !!document.querySelector('.woocommerce-cart-form');
     }
 
     function shouldRefreshFragments() {
@@ -141,36 +134,10 @@
         return true;
     }
 
-    function shouldReloadCartPageAfterSync(reason) {
-        if (!isCartPage()) return false;
-
-        return [
-            'iframe_message',
-            'popup_closed',
-            'aicommerce:cart_updated',
-            'aicommerce:cart_changed',
-            'aicommerce:cart_added',
-            'aicommerce:cart_removed',
-            'aicommerce:cart_quantity_changed',
-            'window_focus',
-            'page_show',
-            'visibility_resume',
-        ].indexOf(reason || '') !== -1;
-    }
-
-    function reloadCartPageOnce() {
-        if (cartPageReloadTimer) return;
-
-        cartPageReloadTimer = window.setTimeout(() => {
-            window.location.reload();
-        }, CART_PAGE_RELOAD_DELAY_MS);
-    }
-
     async function syncCartToWCSession(options) {
         const syncOptions = options || {};
         const bypassCooldown = !!syncOptions.bypassCooldown;
         const retryCount = Number(syncOptions.retryCount || 0);
-        const reason = syncOptions.reason || '';
 
         if (isSyncing) return;
         if (!bypassCooldown && !canSyncNow()) return;
@@ -206,10 +173,6 @@
                     if (isCheckoutPage()) {
                         jQuery(document.body).trigger('update_checkout');
                     }
-                }
-
-                if (shouldReloadCartPageAfterSync(reason)) {
-                    reloadCartPageOnce();
                 }
 
                 window.dispatchEvent(new CustomEvent('aicommerce_cart_synced', { detail: data }));
