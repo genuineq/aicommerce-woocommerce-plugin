@@ -107,11 +107,7 @@ class Updater {
             return $transient;
         }
 
-        // An update can replace the files while the old plugin code is still loaded.
-        $plugin_data = get_file_data( AICOMMERCE_PLUGIN_FILE, array( 'Version' => 'Version' ) );
-        $installed_version = ! empty( $plugin_data['Version'] ) ? $plugin_data['Version'] : $this->version;
-
-        if ( version_compare( $installed_version, $remote->version, '<' ) ) {
+        if ( version_compare( $this->version, $remote->version, '<' ) ) {
             // Newer version available — add to update list
             $transient->response[ $this->plugin_file ] = (object) array(
                 'id'            => $this->plugin_file,
@@ -131,13 +127,11 @@ class Updater {
             unset( $transient->no_update[ $this->plugin_file ] );
         } else {
             // Already up to date
-            unset( $transient->response[ $this->plugin_file ] );
-
             $transient->no_update[ $this->plugin_file ] = (object) array(
                 'id'          => $this->plugin_file,
                 'slug'        => $this->plugin_slug,
                 'plugin'      => $this->plugin_file,
-                'new_version' => $installed_version,
+                'new_version' => $this->version,
                 'url'         => isset( $remote->homepage ) ? $remote->homepage : '',
                 'package'     => '',
             );
