@@ -33,6 +33,8 @@ class CartStorage {
      */
     private const DEFAULT_CART_EXPIRATION = 48 * HOUR_IN_SECONDS;
 
+    private const CLEANUP_BATCH_SIZE = 50;
+
     /**
      * Get AICommerce guest cart expiration duration.
      *
@@ -821,6 +823,7 @@ class CartStorage {
 
     public static function register_cleanup(): void {
         add_action( 'aicommerce_cleanup_guest_carts', array( static::class, 'cleanup_expired_carts' ) );
+        add_action( 'aicommerce_cleanup_guest_carts_batch', array( static::class, 'cleanup_expired_carts' ) );
 
         add_action( 'init', function () {
             if ( function_exists( 'as_has_scheduled_action' ) && ! as_has_scheduled_action( 'aicommerce_cleanup_guest_carts', array(), 'aicommerce' ) ) {
@@ -830,28 +833,52 @@ class CartStorage {
     }
 
     /**
-     * Delete all expired guest cart rows from wp_options.
-     * Triggered by Action Scheduler daily.
+     * Delete expired guest carts in bounded batches, starting daily.
+     *
+     * @param int $after_id Last option ID processed by the previous batch.
      */
-    public static function cleanup_expired_carts(): void {
+    public static function cleanup_expired_carts( int $after_id = 0 ): void {
         global $wpdb;
 
-        $option_names = $wpdb->get_col(
+        $options = $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
-                $wpdb->esc_like( self::OPTION_PREFIX ) . '%'
+                "SELECT option_id, option_name FROM {$wpdb->options}
+                WHERE option_name LIKE %s AND option_id > %d
+                ORDER BY option_id ASC LIMIT %d",
+                $wpdb->esc_like( self::OPTION_PREFIX ) . '%',
+                max( 0, $after_id ),
+                self::CLEANUP_BATCH_SIZE
             )
         );
 
-        if ( empty( $option_names ) ) {
+        if ( empty( $options ) ) {
             return;
         }
 
         $now = time();
-        foreach ( $option_names as $option_name ) {
-            $cart_data = get_option( $option_name );
-            if ( isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < $now ) {
-                delete_option( $option_name );
+        foreach ( $options as $option ) {
+            // Read one payload at a time without populating the options cache.
+            $cart_data = maybe_unserialize( $wpdb->get_var( $wpdb->prepare(
+                "SELECT option_value FROM {$wpdb->options} WHERE option_id = %d",
+                $option->option_id
+            ) ) );
+            if ( is_array( $cart_data ) && isset( $cart_data['expires_at'] ) && $cart_data['expires_at'] < $now ) {
+                delete_option( $option->option_name );
+            }
+            unset( $cart_data );
+            $after_id = (int) $option->option_id;
+        }
+
+        // An ID cursor stays valid even when earlier rows have been deleted.
+        if ( count( $options ) === self::CLEANUP_BATCH_SIZE ) {
+            $action_id = as_schedule_single_action(
+                time() + MINUTE_IN_SECONDS,
+                'aicommerce_cleanup_guest_carts_batch',
+                array( $after_id ),
+                'aicommerce'
+            );
+            if ( ! $action_id ) {
+                throw new \RuntimeException( 'Unable to schedule the next AICommerce guest cart cleanup batch.' );
             }
         }
     }
