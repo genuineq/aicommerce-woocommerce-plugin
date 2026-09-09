@@ -1,7 +1,7 @@
 {
     "name": "AICommerce",
     "slug": "aicommerce",
-    "version": "1.5.7",
+    "version": "1.5.6",
     "requires": "5.8",
     "tested": "9.0",
     "requires_php": "7.4",
