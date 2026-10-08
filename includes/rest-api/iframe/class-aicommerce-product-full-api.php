@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class ProductFullAPI {
     /** Product API cache schema version. */
-    private const CACHE_VERSION = 'v2';
+    private const CACHE_VERSION = 'v3';
 
 
     /**
@@ -622,6 +622,8 @@ class ProductFullAPI {
 
             // Pricing
             'sku'                => $product->get_sku(),
+            // Store currency is shared by the catalog and applies to every price above.
+            'currency'           => get_woocommerce_currency(),
             'price'              => $product->get_price(),
             'regular_price'      => $product->get_regular_price(),
             'sale_price'         => $product->get_sale_price(),

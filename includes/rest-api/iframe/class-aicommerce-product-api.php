@@ -105,7 +105,7 @@ class ProductAPI {
         }
 
         /** Cache search pages aggressively because iframe searches can repeat frequently. */
-        $cache_key = 'aic_s_instock_' . md5( $search_query . '|' . $page . '|' . $per_page );
+        $cache_key = 'aic_s_v2_instock_' . md5( $search_query . '|' . $page . '|' . $per_page );
         $cached    = get_transient( $cache_key );
         if ( false !== $cached ) {
             return new \WP_REST_Response( $cached, 200 );
@@ -423,6 +423,7 @@ class ProductAPI {
             'slug'           => $product->get_slug(),
             'permalink'      => $product->get_permalink(),
             'sku'            => $product->get_sku(),
+            'currency'       => get_woocommerce_currency(),
             'type'           => $product->get_type(),
             'status'         => $product->get_status(),
             'price'          => $product->get_price(),
